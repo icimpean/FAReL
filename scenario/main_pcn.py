@@ -470,6 +470,8 @@ if __name__ == '__main__':
                         help='index for reward (0), StatisticalParity (1), EqualOpportunity (2), '
                              'OverallAccuracyEquality (3), PredictiveParity (4), IndividualFairness (5), '
                              'ConsistencyScoreComplement (6)')
+    parser.add_argument('--default_objectives', default=0, type=int, help="Use [0, 1, 2, 5] for job hiring, "
+                                                                          "[0, 3, 4, 6] for fraud detection")
     parser.add_argument('--env', default='job', type=str, help='job or fraud')
     # parser.add_argument('--action', default='discrete', type=str, help='discrete, multidiscrete or continuous')
     parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
@@ -510,20 +512,16 @@ if __name__ == '__main__':
     on_vsc = args.vsc == 1
 
     env_type = args.env
-    # env_type = "fraud"  # TODO
-
     is_job_hiring = env_type == "job"
-
     n_evaluations = 10
-
-    # args.top_episodes = 5  # TODO
-    # args_n_episodes = 2
-    # args.model_updates = 2
 
     seed = args.seed
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+    if args.default_objectives:
+        args.objectives = [0, 1, 2, 5] if is_job_hiring else [0, 3, 4, 6]
 
     if on_vsc:
         result_dir = "/data/brussel/104/vsc10437/Fairness/"
