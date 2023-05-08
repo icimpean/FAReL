@@ -17,6 +17,9 @@ import argparse
 
 from pytz import timezone
 
+import sys
+sys.path.append("./")  # for command-line execution to find the other packages (e.g. envs)
+
 from agent.pcn.pcn import train, epsilon_metric, non_dominated, compute_hypervolume, run_episode, add_episode, \
     choose_commands, update_model, Transition, choose_action
 
