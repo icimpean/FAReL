@@ -472,12 +472,12 @@ if __name__ == '__main__':
                              'ConsistencyScoreComplement (6)')
     parser.add_argument('--env', default='job', type=str, help='job or fraud')
     # parser.add_argument('--action', default='discrete', type=str, help='discrete, multidiscrete or continuous')
-    parser.add_argument('--lr', default=1e-2, type=float, help='learning rate')
+    parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
     parser.add_argument('--steps', default=1e5, type=float, help='total timesteps')
-    parser.add_argument('--batch', default=128, type=int, help='batch size')
+    parser.add_argument('--batch', default=256, type=int, help='batch size')
     parser.add_argument('--model-updates', default=20, type=int,
                         help='number of times the model is updated at every training iteration')
-    parser.add_argument('--top-episodes', default=10, type=int,
+    parser.add_argument('--top-episodes', default=50, type=int,
                         help='top-n episodes used to compute target-return and horizon. \
               Initially fill ER with n random episodes')
     parser.add_argument('--n-episodes', default=10, type=int,
@@ -494,7 +494,7 @@ if __name__ == '__main__':
     parser.add_argument('--team_size', default=20, type=int, help='maximum team size to reach')
     parser.add_argument('--episode_length', default=100, type=int, help='maximum episode length')
     parser.add_argument('--diversity_weight', default=0, type=int, help='diversity weight, complement of skill weight')
-    parser.add_argument('--population', default='data/belgian_population.csv', type=str,
+    parser.add_argument('--population', default='belgian_population', type=str,
                         help='the name of the population file')
     # Fraud detection parameters
     # TODO
@@ -528,7 +528,7 @@ if __name__ == '__main__':
     if on_vsc:
         result_dir = "/data/brussel/104/vsc10437/Fairness/"
     else:
-        result_dir = "../../../fairRLresults/"
+        result_dir = "../../fairRLresults/"
 
     # Job hiring
     if is_job_hiring:
@@ -537,7 +537,8 @@ if __name__ == '__main__':
         episode_length = args.episode_length
         diversity_weight = args.diversity_weight
         # Training environment
-        applicant_generator = ApplicantGenerator(csv=args.population, seed=seed)
+        population_file = f'scenario/job_hiring/data/{args.population}.csv'
+        applicant_generator = ApplicantGenerator(csv=population_file, seed=seed)
         env = JobHiringEnv(team_size=team_size, seed=seed, episode_length=episode_length,  # Required ep length for pcn
                            diversity_weight=diversity_weight, applicant_generator=applicant_generator)
 

@@ -321,7 +321,7 @@ if __name__ == '__main__':
 
     # Different distributions
     ag_dd = ApplicantGenerator(seed=0)
-    path_dd = "data/belgian_pop_diff_dist.csv"
+    path_dd = "data/belgian_pop_diff_dist_gen.csv"
     # ag_dd.fit_model(path_dd, feature_dist=(HiringFeature.gender, {0: 0.7, 1: 0.3}))
     ag_dd.load_model(path_dd)
 
@@ -333,11 +333,12 @@ if __name__ == '__main__':
     ag_dd2.load_model(path_dd2)
 
     ag_dd3 = ApplicantGenerator(seed=0)
-    path_d3 = "data/belgian_pop_diff_dist3.csv"
+    path_dd3 = "data/belgian_pop_diff_dist_nat_gen.csv"
     ag_dd3.print_model()
+    ag_dd3.fit_model(path_dd3, feature_dist=[(HiringFeature.nationality, HiringFeature.gender),
+                                             {(0, 0): 0.40, (0, 1): 0.40, (1, 0): 0.15, (1, 1): 0.05}])
+    ag_dd3.load_model(path_dd3)
     exit()
-    ag_dd2.fit_model(path_dd2, feature_dist=[(HiringFeature.gender, HiringFeature.nationality),
-                                             {(0, False): 0.25, (0, True): 0.3, (1, False): 0.2, (1, True): 0.25}])
 
 
     n_samples = 1000
