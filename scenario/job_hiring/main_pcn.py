@@ -510,7 +510,7 @@ if __name__ == '__main__':
     on_vsc = args.vsc == 1
 
     env_type = args.env
-    env_type = "fraud"  # TODO
+    # env_type = "fraud"  # TODO
 
     is_job_hiring = env_type == "job"
 
