@@ -157,7 +157,8 @@ class IndividualFairness(IndividualFairnessBase):
             approx = True
         else:
             approx = u == 0
-        diff = sum(total) / max(1, len(total))
+        total = np.array(total)
+        diff = np.nansum(total) / max(1, len(total))
         diff = diff - 1  # Maximise diff (negative is unfair) & shift from [0, 1] to [-1, 0] like the group notions
         # if len(total) > 0:
         #     tot = np.array(total)
@@ -264,3 +265,8 @@ class IndividualFairness(IndividualFairnessBase):
         difference_per_ind = []
 
         return (exact, approx), diff, (unsatisfied, [], difference_per_ind)
+
+
+if __name__ == '__main__':
+    print(sum([]))
+
