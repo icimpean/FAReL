@@ -1,6 +1,8 @@
 from enum import Enum, auto
+from typing import List
 
 import numpy as np
+from scipy.spatial.distance import minkowski, braycurtis
 
 from scenario import CombinedState, Feature
 from scenario.fraud_detection.MultiMAuS.simulator.customers import BaseCustomer
@@ -201,14 +203,16 @@ class TransactionModelMDP(object):
                      else FraudActions.ignore.value, "fraudster": customer.fraudster}
         self.t += 1
 
+    # noinspection PyUnboundLocalVariable
     def similarity_metric(self, state1, state2, distance="HMOM", alpha=1.0, exp=True):
-        n_state1 = self.normalise_state(state1)
-        n_state2 = self.normalise_state(state2)
+        if distance.startswith("H") and distance.endswith("OM"):
+            n_state1 = self.normalise_state(state1)
+            n_state2 = self.normalise_state(state2)
 
-        num1 = np.array([n_state1[f.value] for f in self.numerical_features])
-        nom1 = np.array([n_state1[f.value] for f in self.nominal_features])
-        num2 = np.array([n_state2[f.value] for f in self.numerical_features])
-        nom2 = np.array([n_state2[f.value] for f in self.nominal_features])
+            num1 = np.array([n_state1[f.value] for f in self.numerical_features])
+            nom1 = np.array([n_state1[f.value] for f in self.nominal_features])
+            num2 = np.array([n_state2[f.value] for f in self.numerical_features])
+            nom2 = np.array([n_state2[f.value] for f in self.nominal_features])
 
         # Heterogeneous Euclidean-Overlap Metric (HEOM)
         if distance == 'HEOM':
@@ -216,10 +220,38 @@ class TransactionModelMDP(object):
         # Heterogeneous Manhattan-Overlap Metric (HMOM)
         elif distance == 'HMOM':
             d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
+        # Minkowski distance between two 1-D arrays (minkowski)
+        elif distance == "minkowski":
+            d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
+            return d
+        elif distance == "braycurtis":
+            d = self.braycurtis_metric(state1, state2, w=None)  # TODO: absract w together with consistency score
+            return d
         else:
-            raise ValueError(f"Expected distance: HEOM or HMOM, got: {distance}")
+            raise ValueError(f"Expected distance: HEOM, HMOM or minkowski. Got: {distance}")
 
         return np.exp(-alpha * d) if exp else d
+
+    def minkowski_metric(self, state1: CombinedState, state2: CombinedState, p=2, w=None):
+        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
+                               state1.get_features(self.nominal_features, as_array=True)])
+        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
+                               state2.get_features(self.nominal_features, as_array=True)])
+        return minkowski(norm1, norm2, p=p, w=w)
+
+    def braycurtis_metric(self, state1: CombinedState, state2: CombinedState, w=None):
+        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
+                               state1.get_features(self.nominal_features, as_array=True)])
+        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
+                               state2.get_features(self.nominal_features, as_array=True)])
+        return braycurtis(norm1, norm2, w=w)
+
+    def _normalise_features(self, state: CombinedState, features: List[FraudFeature] = None):
+        if features is None:
+            features = [f for f in FraudFeature]
+        new_values = self.normalise_state(state)
+        new_values = np.array([v for f, v in zip(features, new_values) if f in individual_features])
+        return new_values
 
     def _get_max_norm(self, parameter):
         return max(1, self._params[parameter].shape[0] - 1)
@@ -248,7 +280,9 @@ class TransactionModelMDP(object):
         ])
         return norm_array
 
-    @staticmethod
-    def get_individual(state):
-        individual = {f: state[f] for f in individual_features}
+    def get_individual(self, state, normalise=True):
+        if normalise:
+            return self._normalise_features(state, individual_features)
+        else:
+            individual = {f: state[f] for f in individual_features}
         return individual

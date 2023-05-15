@@ -279,6 +279,7 @@ def consistency_score_metric(X, y, n_neighbors=5, distance_metric="minkowski"):
     """Compute the consistency score, based on aif360.sklearn.metrics.consistency_score
     with optional distance metric. Default for algorithm='ball_tree' is metric='minkowski'
     """
+    print(distance_metric)
     # cast as ndarrays
     X, y = check_X_y(X, y)
     # learn a KNN on the features

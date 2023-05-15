@@ -162,7 +162,8 @@ class ExtendedfMDP(object):
                 self.fairness_framework.get_individual_notion(notion, self.fairness_framework.get_individual,
                                                               self.fairness_framework.threshold,
                                                               self.fairness_framework.similarity_metric,
-                                                              self.fairness_framework.alpha)
+                                                              self.fairness_framework.alpha,
+                                                              self.fairness_framework.distance_metric)
             reward.append(diff)
 
         return next_state, reward, done, info

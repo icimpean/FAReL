@@ -599,6 +599,7 @@ if __name__ == '__main__':
     # args.er_size = 4
     # args.wandb = 0
     # args.steps = 1000
+    # # args.env = "fraud"
 
     arg_use_wandb = args.wandb == 1
 
@@ -682,7 +683,8 @@ if __name__ == '__main__':
                                            group_notions=all_group_notions,
                                            get_individual=env.get_individual,
                                            similarity_metric=env.similarity_metric,
-                                           distance_metric="minkowski",
+                                           # distance_metric="minkowski",
+                                           distance_metric="braycurtis",  # in [0, 1]
                                            alpha=args.fair_alpha,
                                            window=args.window)
 

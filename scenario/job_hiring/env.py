@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.spatial.distance import minkowski
+from scipy.spatial.distance import minkowski, braycurtis
 
 from scenario.job_hiring.features import *
 from scenario import Scenario, CombinedState
@@ -377,6 +377,10 @@ class JobHiringEnv(Scenario):
         # Minkowski distance between two 1-D arrays (minkowski)
         elif distance == "minkowski":
             d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
+            return d
+        elif distance == "braycurtis":
+            d = self.braycurtis_metric(state1, state2, w=None)  # TODO: absract w together with consistency score
+            return d
         else:
             raise ValueError(f"Expected distance: HEOM, HMOM or minkowski. Got: {distance}")
 
@@ -388,6 +392,13 @@ class JobHiringEnv(Scenario):
         norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
                                state2.get_features(self.nominal_features, as_array=True)])
         return minkowski(norm1, norm2, p=p, w=w)
+
+    def braycurtis_metric(self, state1: CombinedState, state2: CombinedState, w=None):
+        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
+                               state1.get_features(self.nominal_features, as_array=True)])
+        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
+                               state2.get_features(self.nominal_features, as_array=True)])
+        return braycurtis(norm1, norm2, w=w)
 
     def _normalise_features(self, state: CombinedState, features: List[HiringFeature] = None):
         new_values = self.applicant_generator.normalise_features(state.sample_dict, features)
