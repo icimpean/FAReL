@@ -21,8 +21,8 @@ if __name__ == '__main__':
     # Fraud
     # /
     populations["fraud"] = ["default"]
-    team_sizes_eps_length["fraud"] = [("default", "1_week")]
-    diversity_weights["fraud"] = ["NA"]
+    team_sizes_eps_length["fraud"] = [(0, 7)]
+    diversity_weights["fraud"] = [0]
 
     # Fairness framework
     window = 100
@@ -36,14 +36,24 @@ if __name__ == '__main__':
                     for div_w in diversity_weights[env]:
                         obj = objectives[env]
                         steps = num_steps[env]
-                        entry = {"env": env, "seed": seed, "objectives": obj, "steps": steps,
+                        entry = {"env": env, "seed": seed, #"objectives": obj,
+                                 "steps": steps,
                                  "team_size": size, "episode_length": length, "diversity_weight": div_w,
                                  "population": pop, "window": window, "fair_alpha": fair_alpha}
                         parameters.append(entry)
 
+                        entry = entry.copy()
+                        entry["seed"] = "${i}"
+                        text = ",".join([f"{k}=" + (str(v) if (not isinstance(v, str)) or k == "seed" else f'\"{v}\"') for k, v in entry.items()])
+                        print(text)
+
+                        # break
+                    # break
+                # break
+            break
     import csv
 
-    path = "./configs.csv"
+    path = "fair_configs2.csv"
     with open(path, mode="w") as file:
         writer = csv.DictWriter(file, fieldnames=parameters[0].keys())
         writer.writeheader()
