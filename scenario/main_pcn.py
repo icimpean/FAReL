@@ -630,7 +630,7 @@ if __name__ == '__main__':
         episode_length = args.episode_length
         diversity_weight = args.diversity_weight
         # Training environment
-        population_file = f'../scenario/job_hiring/data/{args.population}.csv'
+        population_file = f'./scenario/job_hiring/data/{args.population}.csv'
         applicant_generator = ApplicantGenerator(csv=population_file, seed=seed)
         env = JobHiringEnv(team_size=team_size, seed=seed, episode_length=episode_length,  # Required ep length for pcn
                            diversity_weight=diversity_weight, applicant_generator=applicant_generator)
