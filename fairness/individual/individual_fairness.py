@@ -5,6 +5,8 @@ from multiprocessing import Pool
 
 import numpy as np
 from aif360.sklearn.metrics import consistency_score, generalized_entropy_index
+from sklearn.neighbors import NearestNeighbors
+from sklearn.utils import check_X_y
 
 from fairness.individual import IndividualNotion, IndividualFairnessBase
 from fairness.history import History
@@ -32,8 +34,8 @@ def hellinger(p, q):
 
 
 def _pool_individual_fairness(args):
-    i, j, state_i, state_j, score_i, score_j, similarity_metric, alpha = args
-    d = similarity_metric(state_i, state_j, alpha=alpha)
+    i, j, state_i, state_j, score_i, score_j, similarity_metric, alpha, distance_metric = args
+    d = similarity_metric(state_i, state_j, alpha=alpha, distance=distance_metric)
     D = hellinger(score_i, score_j)
     # print(score_i, score_j, D, d, d - D)
     # i, j Fair, difference, D, d
@@ -83,12 +85,13 @@ class IndividualFairness(IndividualFairnessBase):
         self._individual_comparisons = {}
 
     def get_notion(self, notion: IndividualNotion, history: History, get_individual=lambda state: state, threshold=None,
-                   similarity_metric=None, alpha=None):
+                   similarity_metric=None, alpha=None, distance_metric=None):
         # noinspection PyArgumentList
         # print("get_notion", notion)
-        return self._map[notion](history, get_individual, threshold, similarity_metric, alpha)
+        return self._map[notion](history, get_individual, threshold, similarity_metric, alpha, distance_metric)
 
-    def individual_fairness(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=1.0):
+    def individual_fairness(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=1.0,
+                            distance_metric="minkowski"):
         """Let i and j be two individuals represented by their attributes values vectors v_i and v_j.
         Let d(v_i,v_j) represent the similarity distance between individuals i and j.
         Let D be a distance metric between probability distributions M(v_i) and M(v_j).
@@ -115,7 +118,8 @@ class IndividualFairness(IndividualFairnessBase):
                 comp_id = id_i+id_j
                 previous_comp = self._individual_comparisons.get(comp_id)
                 if previous_comp is None:
-                    map_i_j.append((i, j, states[i], states[j], scores[i], scores[j], similarity_metric, alpha))
+                    map_i_j.append((i, j, states[i], states[j], scores[i], scores[j],
+                                    similarity_metric, alpha, distance_metric))
                 else:
                     # print("Individuals\n\t", states[i], "\nand\n\t", states[j], "\nwere compared before (", comp_id, "), moving on...")
                     previous_results.append(previous_comp)
@@ -159,7 +163,7 @@ class IndividualFairness(IndividualFairnessBase):
             approx = u == 0
         total = np.array(total)
         diff = np.nansum(total) / max(1, len(total))
-        diff = diff - 1  # Maximise diff (negative is unfair) & shift from [0, 1] to [-1, 0] like the group notions
+        diff = diff - 1.0  # Maximise diff (negative is unfair) & shift from [0, 1] to [-1, 0] like the group notions
         # if len(total) > 0:
         #     tot = np.array(total)
         #     print(diff, tot.mean(), tot.min(), tot.max())
@@ -168,7 +172,8 @@ class IndividualFairness(IndividualFairnessBase):
         # print((exact, approx), diff, ([], unsatisfied_pairs, difference_per_pair))
         return (exact, approx), diff, ([], unsatisfied_pairs, difference_per_pair)
 
-    def weakly_meritocratic(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=0):
+    def weakly_meritocratic(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=0,
+                            distance_metric="minkowski"):
         """Never prefer one action over another if the long-term (discounted) reward of
         choosing the latter action is higher
         """
@@ -239,7 +244,8 @@ class IndividualFairness(IndividualFairnessBase):
         # print((exact, approx), diff, (unsatisfied, [], difference_per_ind))
         return (exact, approx), diff, (unsatisfied, [], difference_per_ind)
 
-    def consistency_score_complement(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=None):
+    def consistency_score_complement(self, history: History, get_individual, threshold=None, similarity_metric=None,
+                                     alpha=None, distance_metric="minkowski"):
         """Individual fairness metric from [1] that measures how similar the labels are for similar instances.
 
         1 - \frac{1}{n}\sum_{i=1}^n |\hat{y}_i - \frac{1}{\text{n_neighbors}} \sum_{j\in\mathcal{N}_{\text{n_neighbors}}(x_i)} \hat{y}_j|
@@ -248,18 +254,20 @@ class IndividualFairness(IndividualFairnessBase):
             International Conference on Machine Learning, 2013.
         """
         states, actions, _, _, _ = history.get_history()
-        individual_states = list(map(lambda state: state.to_array(individual_only=True), states))
+        # individual_states = list(map(lambda state: state.to_array(individual_only=True), states))
+        individual_states = list(map(lambda state: get_individual(state, normalise=True), states))
         n = len(actions)
 
         if n < 2:
-            CON = 1
+            CON = -1.0
         else:
             # TODO: abstract n_neighbors
-            CON = consistency_score(individual_states, actions, n_neighbors=min(n, 10))
-        diff = -CON
+            CON = consistency_score_metric(individual_states, actions, n_neighbors=min(n, 5),
+                                           distance_metric=distance_metric)
+        diff = CON
 
         exact = diff == 0
-        approx = diff < threshold if threshold else exact
+        approx = diff > -threshold if threshold else exact
 
         unsatisfied = []
         difference_per_ind = []
@@ -267,6 +275,16 @@ class IndividualFairness(IndividualFairnessBase):
         return (exact, approx), diff, (unsatisfied, [], difference_per_ind)
 
 
-if __name__ == '__main__':
-    print(sum([]))
+def consistency_score_metric(X, y, n_neighbors=5, distance_metric="minkowski"):
+    """Compute the consistency score, based on aif360.sklearn.metrics.consistency_score
+    with optional distance metric. Default for algorithm='ball_tree' is metric='minkowski'
+    """
+    # cast as ndarrays
+    X, y = check_X_y(X, y)
+    # learn a KNN on the features
+    nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='ball_tree', metric=distance_metric)
+    nbrs.fit(X)
+    indices = nbrs.kneighbors(X, return_distance=False)
 
+    # compute consistency score
+    return - abs(y - y[indices].mean(axis=1)).mean()

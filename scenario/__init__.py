@@ -64,9 +64,11 @@ class State(object):
                 features.append(f)
         return features
 
-    def get_features(self, features: List[Feature]):
+    def get_features(self, features: List[Feature], as_array=False):
         """Get the values of the requested features"""
         values = [self[feature] for feature in features]
+        if as_array:
+            values = [v.value if isinstance(v, Enum) else v for v in values]
         return values
 
 

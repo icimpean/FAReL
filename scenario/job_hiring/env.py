@@ -1,3 +1,6 @@
+import numpy as np
+from scipy.spatial.distance import minkowski
+
 from scenario.job_hiring.features import *
 from scenario import Scenario, CombinedState
 
@@ -168,7 +171,8 @@ class JobHiringEnv(Scenario):
         # The maximum team size has been reached
         elif self.team_size is not None and self._current_team_size >= self.team_size:
             done = True
-        info = {"goodness": goodness, "true_action": 1 if goodness >= self.hiring_threshold else 0}
+        info = {"goodness": goodness, "true_action": 1 if goodness >= self.hiring_threshold else 0,
+                "team_size": self._current_team_size}
 
         return next_state, reward, done, info
 
@@ -356,11 +360,13 @@ class JobHiringEnv(Scenario):
         rewards = {HiringActions.reject: reward_reject, HiringActions.hire: reward_hire}
         return rewards
 
+    # noinspection PyUnboundLocalVariable
     def similarity_metric(self, state1: CombinedState, state2: CombinedState, distance="HMOM", alpha=1.0, exp=True):
-        num1 = np.array(self._normalise_features(state1, self.numerical_features))
-        nom1 = np.array(state1.get_features(self.nominal_features))
-        num2 = np.array(self._normalise_features(state2, self.numerical_features))
-        nom2 = np.array(state2.get_features(self.nominal_features))
+        if distance.startswith("H") and distance.endswith("OM"):
+            num1 = np.array(self._normalise_features(state1, self.numerical_features))
+            nom1 = np.array(state1.get_features(self.nominal_features))
+            num2 = np.array(self._normalise_features(state2, self.numerical_features))
+            nom2 = np.array(state2.get_features(self.nominal_features))
 
         # Heterogeneous Euclidean-Overlap Metric (HEOM)
         if distance == 'HEOM':
@@ -368,14 +374,24 @@ class JobHiringEnv(Scenario):
         # Heterogeneous Manhattan-Overlap Metric (HMOM)
         elif distance == 'HMOM':
             d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
+        # Minkowski distance between two 1-D arrays (minkowski)
+        elif distance == "minkowski":
+            d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
         else:
-            raise ValueError(f"Expected distance: HEOM or HMOM, got: {distance}")
+            raise ValueError(f"Expected distance: HEOM, HMOM or minkowski. Got: {distance}")
 
         return np.exp(-alpha * d) if exp else d
 
+    def minkowski_metric(self, state1: CombinedState, state2: CombinedState, p=2, w=None):
+        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
+                               state1.get_features(self.nominal_features, as_array=True)])
+        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
+                               state2.get_features(self.nominal_features, as_array=True)])
+        return minkowski(norm1, norm2, p=p, w=w)
+
     def _normalise_features(self, state: CombinedState, features: List[HiringFeature] = None):
         new_values = self.applicant_generator.normalise_features(state.sample_dict, features)
-        new_values = np.array([new_values[f] for f in features])
+        new_values = np.array([new_values[f] for f in new_values])
         return new_values
 
     def normalise_state(self, state: CombinedState):
@@ -385,6 +401,8 @@ class JobHiringEnv(Scenario):
                                for feature, value in zip(features, values)])
         return norm_array
 
-    @staticmethod
-    def get_individual(state: CombinedState):
-        return state.sample_individual
+    def get_individual(self, state: CombinedState, normalise=True):
+        if normalise:
+            return self._normalise_features(state, [f for f in HiringFeature])
+        else:
+            return state.sample_individual

@@ -14,6 +14,7 @@ import os
 
 import torch
 import argparse
+import time
 
 from pytz import timezone
 
@@ -28,12 +29,12 @@ from fairness import SensitiveAttribute
 from fairness.fairness_framework import FairnessFramework, ExtendedfMDP
 from fairness.group import GroupNotion
 from fairness.individual import IndividualNotion
+from loggers.logger import AgentLogger, LeavesLogger, TrainingPCNLogger, EvalLogger
 from scenario.fraud_detection.MultiMAuS.simulator import parameters
 from scenario.fraud_detection.MultiMAuS.simulator.transaction_model import TransactionModel
 from scenario.fraud_detection.env import NUM_FRAUD_FEATURES, TransactionModelMDP, FraudFeature
 from scenario.job_hiring.features import HiringFeature, Gender, ApplicantGenerator
 from scenario.job_hiring.env import HiringActions, JobHiringEnv, NUM_JOB_HIRING_FEATURES
-
 
 ss_emb = {
     'job': {
@@ -139,11 +140,23 @@ class DiscreteHead(nn.Module):
         return x
 
 
-def run_episode_fairness(env, model, desired_return, desired_horizon, max_return, results,
-                         eval=False, normalise_state=False):
+def run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger, current_ep, current_t,
+                         eval=False, normalise_state=False, eval_axes=False):
+    curr_t = time.time()
     transitions = []
     obs = env.reset()
     done = False
+    t = current_t
+    log_entries = []
+    if eval and eval_axes:
+        path = agent_logger.path_eval_axes
+        status = "eval_axes"
+    elif eval:
+        path = agent_logger.path_eval
+        status = "eval"
+    else:
+        path = agent_logger.path_train
+        status = "train"
     while not done:
         curr_obs = env.normalise_state(obs) if normalise_state else obs
         action, scores = choose_action_hire(model, curr_obs if normalise_state else curr_obs.to_array(),
@@ -167,19 +180,25 @@ def run_episode_fairness(env, model, desired_return, desired_horizon, max_return
         # clip desired horizon to avoid negative horizons
         desired_horizon = np.float32(max(desired_horizon - 1, 1.))
         #
-        results["main_reward"][-1].append(reward)
-    results["main_reward"].append([])
+        next_t = time.time()
+        log_entries.append(agent_logger.create_entry(current_ep, t, obs, action, reward, done, info, next_t - curr_t,
+                                                     status))
+        curr_t = next_t
+        t += 1
+    agent_logger.write_data(log_entries, path)
     return transitions
 
 
-def eval_(env, model, coverage_set, horizons, max_return, results, gamma=1., n=10, normalise_state=False):
+def eval_(env, model, coverage_set, horizons, max_return, agent_logger, current_ep, current_t, gamma=1., n=10,
+          normalise_state=False, eval_axes=False):
     e_returns = np.empty((coverage_set.shape[0], n, coverage_set.shape[-1]))
     all_transitions = []
     for e_i, target_return, horizon in zip(np.arange(len(coverage_set)), coverage_set, horizons):
         n_transitions = []
         for n_i in range(n):
-            transitions = run_episode_fairness(env, model, target_return, np.float32(horizon), max_return, results,
-                                               eval=True, normalise_state=normalise_state)
+            transitions = run_episode_fairness(env, model, target_return, np.float32(horizon), max_return, agent_logger,
+                                               current_ep, current_t, eval=True, normalise_state=normalise_state,
+                                               eval_axes=eval_axes)
             # compute return
             for i in reversed(range(len(transitions) - 1)):
                 transitions[i].reward += gamma * transitions[i + 1].reward
@@ -295,40 +314,50 @@ def train_fair(env,
                objectives=None,
                n_evaluations=10,
                logdir='runs/',
-               normalise_state=False
+               normalise_state=False,
+               use_wandb=True
                ):
     step = 0
     if objectives == None:
         objectives = tuple([i for i in range(len(ref_point))])
     total_episodes = n_er_episodes
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    logger = Logger(logdir=logdir)
-    n_checkpoints = 0
+    if use_wandb:
+        logger = Logger(logdir=logdir)
+    agent_logger = AgentLogger(f"{logdir}/agent_log_e_replay.csv", f"{logdir}/agent_log_train.csv",
+                               f"{logdir}/agent_log_eval.csv", f"{logdir}/agent_log_eval_axes.csv")
+    leaves_logger = LeavesLogger(
+        objective_names=env.obj_names if isinstance(env, ExtendedfMDP) else [f'o_{o}' for o in objectives])
+    all_obj = [i for i in range(len(ref_point))]
+    pcn_logger = TrainingPCNLogger(objectives=all_obj)
+    eval_logger = EvalLogger(objectives=all_obj)
 
-    results = {
-        'notions': env.obj_names,
-        'description': [],
-        'reward': [],
-        'cm': [],
-        'overview': None,
-        'main_reward': [[]],
-        'transitions': [],
-    }
+    agent_logger.create_file(agent_logger.path_eval_axes)
+    agent_logger.create_file(agent_logger.path_eval)
+    agent_logger.create_file(agent_logger.path_train)
+    agent_logger.create_file(agent_logger.path_experience)
+
+    leaves_logger.create_file(f"{logdir}/leaves_log.csv")
+    pcn_logger.create_file(f"{logdir}/pcn_log.csv")
+    eval_logger.create_file(f"{logdir}/eval_log.csv")
+    log_entries = []
+
+    n_checkpoints = 0
 
     # fill buffer with random episodes
     experience_replay = []
     print("Experience replay...")
     for ep in range(n_er_episodes):
+        curr_t = time.time()
         transitions = []
         obs = env.reset()
         done = False
         while not done:
             curr_obs = env.normalise_state(obs) if normalise_state else obs
             action = np.random.randint(0, env.nA)
-            n_obs, reward, done, info = env.step(action, scores=np.full(env.nA, fill_value=1/env.nA))
+            n_obs, reward, done, info = env.step(action, scores=np.full(env.nA, fill_value=1 / env.nA))
             next_obs = env.normalise_state(n_obs) if normalise_state else n_obs
             print("t=", step, ep, action, reward)
-            results["main_reward"][-1].append(reward)
 
             if normalise_state:
                 transitions.append(
@@ -337,15 +366,17 @@ def train_fair(env,
                 transitions.append(
                     Transition(curr_obs.to_array(), action, np.float32(reward).copy(), next_obs.to_array(), done))
 
+            next_t = time.time()
+            log_entries.append(agent_logger.create_entry(ep, step, obs, action, reward, done, info, next_t - curr_t,
+                                                         status="e_replay"))
+            curr_t = next_t
+
             obs = n_obs
             step += 1
         # add episode in-place
         add_episode(transitions, experience_replay, gamma=gamma, max_size=max_size, step=step)
-        #
-        results["transitions"].append(transitions)
-        results["main_reward"].append([])
-    with open(f'{logger.logdir}/fair_results_{n_checkpoints + 1}.pt', "wb") as f:
-        pickle.dump(results, f)
+        agent_logger.write_data(log_entries, agent_logger.path_experience)
+
     print("Training...")
     while step < total_steps:
         loss = []
@@ -365,7 +396,13 @@ def train_fair(env,
         e_lengths, e_returns = np.array(e_lengths), np.array(e_returns)
         try:
             if len(experience_replay) == max_size:
-                logger.put('train/leaves', e_returns, step, f'{e_returns.shape[-1]}d')
+                if use_wandb:
+                    logger.put('train/leaves', e_returns, step, f'{e_returns.shape[-1]}d')
+                else:
+                    leaves = []
+                    for er in e_returns:
+                        leaves.append(leaves_logger.create_entry(ep, step, er))
+                    leaves_logger.write_data(leaves)
             # hv = hypervolume(e_returns[...,objectives]*-1)
             # hv_est = hv.compute(ref_point[objectives]*-1)
             # logger.put('train/hypervolume', hv_est, step, 'scalar')
@@ -376,27 +413,28 @@ def train_fair(env,
         returns = []
         horizons = []
         for _ in range(n_step_episodes):
-            transitions = run_episode_fairness(env, model, desired_return, desired_horizon, max_return, results,
-                                               normalise_state=normalise_state)
+            transitions = run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger,
+                                               normalise_state=normalise_state, current_t=step, current_ep=ep)
             step += len(transitions)
+            ep += 1
             add_episode(transitions, experience_replay, gamma=gamma, max_size=max_size, step=step)
             returns.append(transitions[0].reward)
             horizons.append(len(transitions))
-            results["transitions"].append(transitions)
-        with open(f'{logger.logdir}/fair_results_{n_checkpoints + 1}.pt', "wb") as f:
-            pickle.dump(results, f)
 
         total_episodes += n_step_episodes
-        logger.put('train/episode', total_episodes, step, 'scalar')
-        logger.put('train/loss', np.mean(loss), step, 'scalar')
-        logger.put('train/entropy', np.mean(entropy), step, 'scalar')
-        logger.put('train/horizon/desired', desired_horizon, step, 'scalar')
-        logger.put('train/horizon/distance', np.linalg.norm(np.mean(horizons) - desired_horizon), step, 'scalar')
-        for o in range(len(desired_return)):
-            logger.put(f'train/return/{o}/value', desired_horizon, step, 'scalar')
-            logger.put(f'train/return/{o}/desired', np.mean(np.array(returns)[:, o]), step, 'scalar')
-            logger.put(f'train/return/{o}/distance',
-                       np.linalg.norm(np.mean(np.array(returns)[:, o]) - desired_return[o]), step, 'scalar')
+
+        if use_wandb:
+            logger.put('train/episode', total_episodes, step, 'scalar')
+            logger.put('train/loss', np.mean(loss), step, 'scalar')
+            logger.put('train/entropy', np.mean(entropy), step, 'scalar')
+            logger.put('train/horizon/desired', desired_horizon, step, 'scalar')
+            logger.put('train/horizon/distance', np.linalg.norm(np.mean(horizons) - desired_horizon), step, 'scalar')
+            for o in range(len(desired_return)):
+                logger.put(f'train/return/{o}/value', np.mean(np.array(returns)[:, o]), step, 'scalar')
+                logger.put(f'train/return/{o}/desired', desired_return[o], step, 'scalar')
+                logger.put(f'train/return/{o}/distance',
+                           np.linalg.norm(np.mean(np.array(returns)[:, o]) - desired_return[o]), step, 'scalar')
+
         print(
             f'step {step} \t return {np.mean(returns, axis=0)}, ({np.std(returns, axis=0)}) \t loss {np.mean(loss):.3E}')
 
@@ -405,57 +443,104 @@ def train_fair(env,
         hv = compute_hypervolume(np.expand_dims(valid_e_returns[:, objectives], 0), ref_point[objectives,])[0] if len(
             valid_e_returns) else 0
 
-        wandb.log({
-            'episode': total_episodes,
-            'episode_steps': np.mean(horizons),
-            'loss': np.mean(loss),
-            'entropy': np.mean(entropy),
-            'hypervolume': hv,
-        }, step=step)
+        # current coverage set
+        nd_coverage_set, e_i = non_dominated(e_returns[:, objectives], return_indexes=True)
+
+        if use_wandb:
+            wandb.log({
+                'episode': total_episodes,
+                'episode_steps': np.mean(horizons),
+                'loss': np.mean(loss),
+                'entropy': np.mean(entropy),
+                'hypervolume': hv,
+            }, step=step)
+        else:
+            entry = pcn_logger.create_entry(ep, step, np.mean(loss), np.mean(entropy), desired_horizon,
+                                    np.linalg.norm(np.mean(horizons) - desired_horizon), np.mean(horizons), hv,
+                                    e_returns, nd_coverage_set,
+                                    np.mean(np.array(returns), axis=0), desired_return,
+                                    [np.linalg.norm(np.mean(np.array(returns)[:, o]) - desired_return[o]) for o in range(len(desired_return))])
+            pcn_logger.write_data(entry)
 
         if step >= (n_checkpoints + 1) * total_steps / 10:
-            torch.save(model, f'{logger.logdir}/model_{n_checkpoints + 1}.pt')
+            torch.save(model, f'{logdir}/model_{n_checkpoints + 1}.pt')
             n_checkpoints += 1
 
             columns = env.obj_names if isinstance(env, ExtendedfMDP) else [f'o_{o}' for o in range(e_returns.shape[1])]
 
-            coverage_set_table = wandb.Table(data=e_returns, columns=columns)
+            if use_wandb:
+                coverage_set_table = wandb.Table(data=e_returns, columns=columns)
 
-            # current coverage set
-            _, e_i = non_dominated(e_returns[:, objectives], return_indexes=True)
+            # # current coverage set
+            # _, e_i = non_dominated(e_returns[:, objectives], return_indexes=True)
             e_returns = e_returns[e_i]
             e_lengths = e_lengths[e_i]
-            e_r, t_r = eval_(env, model, e_returns, e_lengths, max_return, results,
+            e_r, t_r = eval_(env, model, e_returns, e_lengths, max_return, agent_logger, ep, step,
                              gamma=gamma, n=n_evaluations, normalise_state=normalise_state)
-            # save raw evaluation returns
-            logger.put(f'eval/returns/{n_checkpoints}', e_r, 0, f'{len(e_r)}d')
+
             # compute e-metric
             epsilon = epsilon_metric(e_r[..., objectives].mean(axis=1), e_returns[..., objectives])
-            logger.put('eval/epsilon/max', epsilon.max(), step, 'scalar')
-            logger.put('eval/epsilon/mean', epsilon.mean(), step, 'scalar')
+            if use_wandb:
+                # save raw evaluation returns
+                logger.put(f'eval/returns/{n_checkpoints}', e_r, 0, f'{len(e_r)}d')
+                logger.put('eval/epsilon/max', epsilon.max(), step, 'scalar')
+                logger.put('eval/epsilon/mean', epsilon.mean(), step, 'scalar')
             print('=' * 10, ' evaluation ', '=' * 10)
             for d, r in zip(e_returns, e_r):
                 print('desired: ', d, '\t', 'return: ', r.mean(0))
             print(f'epsilon max/mean: {epsilon.max():.3f} \t {epsilon.mean():.3f}')
             print('=' * 22)
 
-            nd_coverage_set_table = wandb.Table(data=e_returns * env.scale[None], columns=columns)
-            nd_executions_table = wandb.Table(data=e_r.mean(axis=1) * env.scale[None], columns=columns)
+            if use_wandb:
+                nd_coverage_set_table = wandb.Table(data=e_returns * env.scale[None], columns=columns)
+                nd_executions_table = wandb.Table(data=e_r.mean(axis=1) * env.scale[None], columns=columns)
 
-            executions_transitions = wandb.Artifact(
-                f'run-{wandb.run.id}-execution-transitions', type='transitions'
-            )
-            with executions_transitions.new_file('transitions.pkl', 'wb') as f:
-                pickle.dump(t_r, f)
+            if use_wandb:
+                executions_transitions = wandb.Artifact(
+                    f'run-{wandb.run.id}-execution-transitions', type='transitions'
+                )
+                with executions_transitions.new_file('transitions.pkl', 'wb') as f:
+                    pickle.dump(t_r, f)
 
-            wandb.log({
-                'coverage_set': coverage_set_table,
-                'nd_coverage_set': nd_coverage_set_table,
-                'executions': nd_executions_table,
-                'eps_max': epsilon.max(),
-                'eps_mean': epsilon.mean(),
-            }, step=step)
-            wandb.run.log_artifact(executions_transitions)
+                wandb.log({
+                    'coverage_set': coverage_set_table,
+                    'nd_coverage_set': nd_coverage_set_table,
+                    'executions': nd_executions_table,
+                    'eps_max': epsilon.max(),
+                    'eps_mean': epsilon.mean(),
+                }, step=step)
+
+                wandb.run.log_artifact(executions_transitions)
+            else:
+                entries = []
+                for d, r in zip(e_returns, e_r):
+                    entry = eval_logger.create_entry(ep, step, epsilon.max(), epsilon.mean(), d, r.mean(0), "eval")
+                    entries.append(entry)
+                eval_logger.write_data(entries)
+
+                # TODO: compute maximisation for single reward at a time
+                ax_e_returns = np.full((len(ref_point), len(ref_point)), fill_value=-1)
+                # Get for each objective the index with the highest value for length
+                ax_idx = np.argmax(e_returns, axis=0)
+                ax_e_lengths = [e_lengths[i] for i in ax_idx]
+                for obj in range(len(ref_point)):
+                    # reward in [-1, 1]
+                    if obj == 0:
+                        ax_e_returns[obj, obj] = 1
+                    # fairness notions in [-1, 0]
+                    else:
+                        ax_e_returns[obj, obj] = 0
+                # print("axes e returns\n", ax_e_returns)
+                ax_e_r, ax_t_r = eval_(env, model, ax_e_returns, ax_e_lengths, max_return, agent_logger, ep, step,
+                                       gamma=gamma, n=n_evaluations, normalise_state=normalise_state, eval_axes=True)
+                ax_epsilon = epsilon_metric(ax_e_r[..., objectives].mean(axis=1), ax_e_returns[..., objectives])
+
+                entries = []
+                for d, r in zip(ax_e_returns, ax_e_r):
+                    entry = eval_logger.create_entry(ep, step, ax_epsilon.max(), ax_epsilon.mean(),
+                                                     d, r.mean(0), "eval_axes")
+                    entries.append(entry)
+                eval_logger.write_data(entries)
 
 
 if __name__ == '__main__':
@@ -503,10 +588,19 @@ if __name__ == '__main__':
     # Fairness framework
     parser.add_argument('--window', default=100, type=int, help='fairness framework window')
     parser.add_argument('--fair_alpha', default=0.1, type=float, help='fairness framework alpha for similarity metric')
+    parser.add_argument('--wandb', default=1, type=int, help="use wandb for loggers or save local only")
 
     #
     args = parser.parse_args()
     print(args)
+
+    # args.top_episodes = 3  # TODO
+    # args.n_episodes = 5
+    # args.er_size = 4
+    # args.wandb = 0
+    # args.steps = 1000
+
+    arg_use_wandb = args.wandb == 1
 
     device = 'cpu'
     on_vsc = args.vsc == 1
@@ -535,7 +629,7 @@ if __name__ == '__main__':
         episode_length = args.episode_length
         diversity_weight = args.diversity_weight
         # Training environment
-        population_file = f'scenario/job_hiring/data/{args.population}.csv'
+        population_file = f'../scenario/job_hiring/data/{args.population}.csv'
         applicant_generator = ApplicantGenerator(csv=population_file, seed=seed)
         env = JobHiringEnv(team_size=team_size, seed=seed, episode_length=episode_length,  # Required ep length for pcn
                            diversity_weight=diversity_weight, applicant_generator=applicant_generator)
@@ -572,7 +666,8 @@ if __name__ == '__main__':
 
     #
     logdir += '/'.join([f'{k}_{v}' for k, v in vars(args).items()]) + '/'
-    logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S_') + str(uuid.uuid4())[:4] + '/'
+    # logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S_') + str(uuid.uuid4())[:4] + '/'
+    logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S/')
     os.makedirs(logdir, exist_ok=True)
 
     #
@@ -587,6 +682,7 @@ if __name__ == '__main__':
                                            group_notions=all_group_notions,
                                            get_individual=env.get_individual,
                                            similarity_metric=env.similarity_metric,
+                                           distance_metric="minkowski",
                                            alpha=args.fair_alpha,
                                            window=args.window)
 
@@ -612,8 +708,9 @@ if __name__ == '__main__':
     model = Model(env.nA, scaling_factor, tuple(args.objectives), ss).to(device)
     model = DiscreteHead(model)
 
-    wandb.init(project=f'pcn-fair-{env_type}', entity='icimpean', config={k: v for k, v in vars(args).items()},
-               dir=logdir)
+    if arg_use_wandb:
+        wandb.init(project=f'pcn-fair-{env_type}', entity='icimpean', config={k: v for k, v in vars(args).items()},
+                   dir=logdir, mode="offline")
 
     train_fair(env,
                model,
@@ -631,7 +728,8 @@ if __name__ == '__main__':
                n_evaluations=n_evaluations,
                objectives=tuple(args.objectives),
                logdir=logdir,
-               normalise_state=True
+               normalise_state=True,
+               use_wandb=arg_use_wandb
                )
 
     t_end = time.time()

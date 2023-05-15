@@ -91,6 +91,8 @@ class GroupFairnessBase(object):
         exact, approx, diff = self._is_fair(prob_sensitive, prob_other, threshold)
 
         # Set NaN values (missing groups so fairness cannot be calculated) to unfair
+        if len(states) < 2:
+            diff = 1.0
         diff = np.nan_to_num(-diff)
 
         # Return fairness

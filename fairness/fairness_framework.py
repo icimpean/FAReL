@@ -25,7 +25,8 @@ class FairnessFramework(object):
         history: The collection of state-action-score-reward tuples encountered by an agent
     """
     def __init__(self, actions, sensitive_attributes: Union[SensitiveAttribute, List[SensitiveAttribute]],
-                 threshold=None, get_individual=lambda state: state, similarity_metric=None, alpha=None,
+                 threshold=None, get_individual=lambda state: state, similarity_metric=None,
+                 distance_metric="minkowski", alpha=None,
                  group_notions=None, individual_notions=None, window=None,
                  visualise=False, visualise_cm=False, visualise_notions=False,
                  visualise_reward=False, visualise_hist=False):
@@ -42,6 +43,7 @@ class FairnessFramework(object):
             if isinstance(sensitive_attributes, SensitiveAttribute) else sensitive_attributes
         #
         self.get_individual = get_individual
+        self.distance_metric = distance_metric
         self.similarity_metric = similarity_metric
         self.alpha = alpha
         #
@@ -84,7 +86,7 @@ class FairnessFramework(object):
             for sensitive_attribute in self.sensitive_attributes:
                 (exact, approx), diff, (prob_sensitive, prob_other) = \
                     self.get_group_notion(notion, sensitive_attribute, self.threshold)
-                notion_reward = -diff
+                notion_reward = diff
                 attr_id = str(sensitive_attribute)
                 self.exact_fairness[notion][attr_id].append(exact)
                 self.approx_fairness[notion][attr_id].append(approx)
@@ -94,8 +96,8 @@ class FairnessFramework(object):
         for notion in self.individual_notions:
             (exact, approx), diff, (unsatisfied_individuals, unsatisfied_pairs, _) = \
                 self.get_individual_notion(notion, self.get_individual, self.threshold,
-                                           self.similarity_metric, self.alpha)
-            notion_reward = -diff
+                                           self.similarity_metric, self.alpha, self.distance_metric)
+            notion_reward = diff
             self.exact_fairness[notion].append(exact)
             self.approx_fairness[notion].append(approx)
             self.reward_fairness[notion].append(notion_reward)
@@ -107,10 +109,10 @@ class FairnessFramework(object):
                                               threshold)
 
     def get_individual_notion(self, individual_notion: IndividualNotion, get_individual=lambda state: state,
-                              threshold=None, similarity_metric=None, alpha=None):
+                              threshold=None, similarity_metric=None, alpha=None, distance_metric="minkowski"):
         """Get the given individual notion"""
         return self.individual_fairness.get_notion(individual_notion, self.history, get_individual, threshold,
-                                                   similarity_metric, alpha)
+                                                   similarity_metric, alpha, distance_metric)
 
 
 class ExtendedfMDP(object):
