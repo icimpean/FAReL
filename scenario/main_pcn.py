@@ -441,7 +441,7 @@ def train_fair(env,
         # compute hypervolume of leaves
         valid_e_returns = e_returns[np.all(e_returns[:, objectives] >= ref_point[objectives,], axis=1)]
         hv = compute_hypervolume(np.expand_dims(valid_e_returns[:, objectives], 0), ref_point[objectives,])[0] if len(
-            valid_e_returns) else 0
+            valid_e_returns) and len(objectives) > 1 else 0
 
         # current coverage set
         nd_coverage_set, e_i = non_dominated(e_returns[:, objectives], return_indexes=True)
@@ -557,6 +557,7 @@ if __name__ == '__main__':
                              'ConsistencyScoreComplement (6)')
     parser.add_argument('--default_objectives', default=0, type=int, help="Use [0, 1, 2, 5] for job hiring, "
                                                                           "[0, 3, 4, 6] for fraud detection")
+    parser.add_argument('--single_objective', default=-1, type=int, help="Use a single objective to train on")
     parser.add_argument('--env', default='job', type=str, help='job or fraud')
     # parser.add_argument('--action', default='discrete', type=str, help='discrete, multidiscrete or continuous')
     parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
@@ -599,6 +600,7 @@ if __name__ == '__main__':
     # args.er_size = 4
     # args.wandb = 0
     # args.steps = 1000
+    # args.single_objective = 0
     # # args.env = "fraud"
 
     arg_use_wandb = args.wandb == 1
@@ -616,7 +618,11 @@ if __name__ == '__main__':
     torch.manual_seed(seed)
 
     if args.default_objectives:
+        print("Default env objective:", args.objectives)
         args.objectives = [0, 1, 2, 5] if is_job_hiring else [0, 3, 4, 6]
+    if args.single_objective != -1:
+        args.objectives = [args.single_objective]
+        print("Single objective:", args.objectives)
 
     if on_vsc:
         result_dir = "/data/brussel/104/vsc10437/Fairness/"
@@ -631,6 +637,8 @@ if __name__ == '__main__':
         diversity_weight = args.diversity_weight
         # Training environment
         population_file = f'./scenario/job_hiring/data/{args.population}.csv'
+        if not on_vsc:
+            population_file = "." + population_file
         applicant_generator = ApplicantGenerator(csv=population_file, seed=seed)
         env = JobHiringEnv(team_size=team_size, seed=seed, episode_length=episode_length,  # Required ep length for pcn
                            diversity_weight=diversity_weight, applicant_generator=applicant_generator)
