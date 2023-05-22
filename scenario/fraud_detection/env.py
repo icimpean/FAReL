@@ -137,6 +137,15 @@ class TransactionModelMDP(object):
         return customer
 
     def reset(self):
+        # current date
+        self.transaction_model.curr_global_date = self.transaction_model.parameters['start_date']
+        # set termination status
+        self.transaction_model.terminated = False
+        #
+        self.transaction_model.revenue = 0
+        self.transaction_model.genuine_transactions = 0
+        self.transaction_model.fraudulent_transactions = 0
+        self.transaction_model.lost_customers = 0
         self.transaction_model.pre_step()
         self._buffer = self.scheduler.agent_buffer(shuffled=True)
         self.customer = self._get_customer()
