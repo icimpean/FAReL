@@ -35,9 +35,10 @@ individual_features = [f for f in FraudFeature if f not in context_features]
 
 
 class TransactionModelMDP(object):
-    def __init__(self, transaction_model, do_reward_shaping=False):
+    def __init__(self, transaction_model, do_reward_shaping=False, num_transactions=None):
         self.transaction_model = transaction_model
         self.do_reward_shaping = do_reward_shaping
+        self.num_transactions = num_transactions
         self._params = self.transaction_model.parameters
         self.input_shape = NUM_FRAUD_FEATURES
         self.actions = [a for a in FraudActions]
@@ -51,6 +52,7 @@ class TransactionModelMDP(object):
         self.info = None
         self.state = None
         self.t = 0
+        self.n_transactions = 0
 
         # Replicate transaction model and schedule
         self.scheduler = self.transaction_model.schedule
@@ -139,7 +141,14 @@ class TransactionModelMDP(object):
     def reset(self):
         # current date
         self.transaction_model.curr_global_date = self.transaction_model.parameters['start_date']
+        self.transaction_model.next_customer_id = 0
+        self.transaction_model.next_fraudster_id = 0
+        self.transaction_model.next_card_id = 0
+        self.transaction_model.merchants = self.transaction_model.initialise_merchants()
+        self.transaction_model.customers = self.transaction_model.initialise_customers()
+        self.transaction_model.fraudsters = self.transaction_model.initialise_fraudsters()
         # set termination status
+        self.n_transactions = 0
         self.transaction_model.terminated = False
         #
         self.transaction_model.revenue = 0
@@ -202,12 +211,17 @@ class TransactionModelMDP(object):
         else:
             self.transaction_model.genuine_transactions += 1
         self.transaction_model.revenue += reward
+        self.n_transactions += 1
 
         # update agent
         self.reward = reward
         self.previous_state = self.state
         self.action = action
         self.done = self.transaction_model.terminated
+        if not self.done and self.num_transactions is not None:
+            if self.n_transactions >= self.num_transactions:
+                self.done = True
+
         self.info = {"true_action": FraudActions.authenticate.value if customer.fraudster
                      else FraudActions.ignore.value, "fraudster": customer.fraudster}
         self.t += 1

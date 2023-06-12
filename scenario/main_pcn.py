@@ -30,6 +30,7 @@ from fairness.fairness_framework import FairnessFramework, ExtendedfMDP
 from fairness.group import GroupNotion
 from fairness.individual import IndividualNotion
 from loggers.logger import AgentLogger, LeavesLogger, TrainingPCNLogger, EvalLogger
+from scenario import CombinedState
 from scenario.fraud_detection.MultiMAuS.simulator import parameters
 from scenario.fraud_detection.MultiMAuS.simulator.transaction_model import TransactionModel
 from scenario.fraud_detection.env import NUM_FRAUD_FEATURES, TransactionModelMDP, FraudFeature
@@ -181,8 +182,9 @@ def run_episode_fairness(env, model, desired_return, desired_horizon, max_return
         desired_horizon = np.float32(max(desired_horizon - 1, 1.))
         #
         next_t = time.time()
-        log_entries.append(agent_logger.create_entry(current_ep, t, obs, action, reward, done, info, next_t - curr_t,
-                                                     status))
+        if not eval_axes:
+            log_entries.append(agent_logger.create_entry(current_ep, t, obs, action, reward, done, info, next_t - curr_t,
+                                                         status))
         curr_t = next_t
         t += 1
     agent_logger.write_data(log_entries, path)
@@ -326,29 +328,33 @@ def train_fair(env,
         logger = Logger(logdir=logdir)
     agent_logger = AgentLogger(f"{logdir}/agent_log_e_replay.csv", f"{logdir}/agent_log_train.csv",
                                f"{logdir}/agent_log_eval.csv", f"{logdir}/agent_log_eval_axes.csv")
-    leaves_logger = LeavesLogger(
-        objective_names=env.obj_names if isinstance(env, ExtendedfMDP) else [f'o_{o}' for o in objectives])
+    # leaves_logger = LeavesLogger(
+    #     objective_names=env.obj_names if isinstance(env, ExtendedfMDP) else [f'o_{o}' for o in objectives])
     all_obj = [i for i in range(len(ref_point))]
     pcn_logger = TrainingPCNLogger(objectives=all_obj)
     eval_logger = EvalLogger(objectives=all_obj)
 
-    agent_logger.create_file(agent_logger.path_eval_axes)
+    # agent_logger.create_file(agent_logger.path_eval_axes)
     agent_logger.create_file(agent_logger.path_eval)
     agent_logger.create_file(agent_logger.path_train)
     agent_logger.create_file(agent_logger.path_experience)
 
-    leaves_logger.create_file(f"{logdir}/leaves_log.csv")
+    # leaves_logger.create_file(f"{logdir}/leaves_log.csv")
     pcn_logger.create_file(f"{logdir}/pcn_log.csv")
     eval_logger.create_file(f"{logdir}/eval_log.csv")
-    log_entries = []
-
     n_checkpoints = 0
 
     # fill buffer with random episodes
     experience_replay = []
     print("Experience replay...")
+    import objgraph
+    tr.print_diff()
+    objgraph.show_most_common_types()
+    objgraph.show_growth(limit=15)
+
     for ep in range(n_er_episodes):
         curr_t = time.time()
+        log_entries = []
         transitions = []
         obs = env.reset()
         done = False
@@ -357,7 +363,9 @@ def train_fair(env,
             action = np.random.randint(0, env.nA)
             n_obs, reward, done, info = env.step(action, scores=np.full(env.nA, fill_value=1 / env.nA))
             next_obs = env.normalise_state(n_obs) if normalise_state else n_obs
-            print("t=", step, ep, action, reward)
+            # TODO
+            if step % 20 == 0:
+                print("t=", step, ep, action, reward)
 
             if normalise_state:
                 transitions.append(
@@ -365,7 +373,6 @@ def train_fair(env,
             else:
                 transitions.append(
                     Transition(curr_obs.to_array(), action, np.float32(reward).copy(), next_obs.to_array(), done))
-
             next_t = time.time()
             log_entries.append(agent_logger.create_entry(ep, step, obs, action, reward, done, info, next_t - curr_t,
                                                          status="e_replay"))
@@ -377,8 +384,28 @@ def train_fair(env,
         add_episode(transitions, experience_replay, gamma=gamma, max_size=max_size, step=step)
         agent_logger.write_data(log_entries, agent_logger.path_experience)
 
+    del log_entries
+    print("after ER:")
+    tr.print_diff()
+    objgraph.show_growth(limit=15)
+    ctr.create_snapshot("after experience replay 1")
+
+    roots = objgraph.get_leaking_objects()
+    print(len(roots), "leaks")
+    objgraph.show_most_common_types(objects=roots)
+
+    # exit()
+
     print("Training...")
+    # tr.print_diff()
+    # input()
+
+    update_num = 0
+
     while step < total_steps:
+        print("loop", update_num)
+        tr.print_diff()
+
         loss = []
         entropy = []
         for moupd in range(n_model_updates):
@@ -387,6 +414,10 @@ def train_fair(env,
             lp = lp.detach().cpu().numpy()
             ent = np.sum(-np.exp(lp) * lp)
             entropy.append(ent)
+        print("model updates", update_num)
+        tr.print_diff()
+        ctr.create_snapshot(f"after model updates {update_num}")
+        objgraph.show_growth(limit=15)
 
         desired_return, desired_horizon = choose_commands(experience_replay, n_er_episodes, objectives)
 
@@ -400,9 +431,9 @@ def train_fair(env,
                     logger.put('train/leaves', e_returns, step, f'{e_returns.shape[-1]}d')
                 else:
                     leaves = []
-                    for er in e_returns:
-                        leaves.append(leaves_logger.create_entry(ep, step, er))
-                    leaves_logger.write_data(leaves)
+                    # for er in e_returns:
+                    #     leaves.append(leaves_logger.create_entry(ep, step, er))
+                    # leaves_logger.write_data(leaves)
             # hv = hypervolume(e_returns[...,objectives]*-1)
             # hv_est = hv.compute(ref_point[objectives]*-1)
             # logger.put('train/hypervolume', hv_est, step, 'scalar')
@@ -412,6 +443,9 @@ def train_fair(env,
 
         returns = []
         horizons = []
+        print("before n_step_episodes")
+        tr.print_diff()
+        objgraph.show_growth(limit=15)
         for _ in range(n_step_episodes):
             transitions = run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger,
                                                normalise_state=normalise_state, current_t=step, current_ep=ep)
@@ -421,7 +455,11 @@ def train_fair(env,
             returns.append(transitions[0].reward)
             horizons.append(len(transitions))
 
+        print("after n_step_episodes")
+        tr.print_diff()
+        objgraph.show_growth(limit=15)
         total_episodes += n_step_episodes
+        ctr.create_snapshot(f"after play episodes {update_num}")
 
         if use_wandb:
             logger.put('train/episode', total_episodes, step, 'scalar')
@@ -518,35 +556,19 @@ def train_fair(env,
                     entries.append(entry)
                 eval_logger.write_data(entries)
 
-                # TODO: compute maximisation for single reward at a time
-                ax_e_returns = np.full((len(ref_point), len(ref_point)), fill_value=-1)
-                # Get for each objective the index with the highest value for length
-                ax_idx = np.argmax(e_returns, axis=0)
-                ax_e_lengths = [e_lengths[i] for i in ax_idx]
-                for obj in range(len(ref_point)):
-                    # reward in [-1, 1]
-                    if obj == 0:
-                        ax_e_returns[obj, obj] = 1
-                    # fairness notions in [-1, 0]
-                    else:
-                        ax_e_returns[obj, obj] = 0
-                # print("axes e returns\n", ax_e_returns)
-                ax_e_r, ax_t_r = eval_(env, model, ax_e_returns, ax_e_lengths, max_return, agent_logger, ep, step,
-                                       gamma=gamma, n=n_evaluations, normalise_state=normalise_state, eval_axes=True)
-                ax_epsilon = epsilon_metric(ax_e_r[..., objectives].mean(axis=1), ax_e_returns[..., objectives])
-
-                entries = []
-                for d, r in zip(ax_e_returns, ax_e_r):
-                    entry = eval_logger.create_entry(ep, step, ax_epsilon.max(), ax_epsilon.mean(),
-                                                     d, r.mean(0), "eval_axes")
-                    entries.append(entry)
-                eval_logger.write_data(entries)
+        update_num += 1
+        print("end update", update_num)
+        tr.print_diff()
+        ctr.create_snapshot(f"after model updates {update_num}")
+        ctr.stats.print_summary()
+        objgraph.show_growth(limit=15)
+        # exit()
 
 
 if __name__ == '__main__':
     # import gym_covid
     # print(torch.cuda.is_available())
-
+    import objgraph
     import time
     t_start = time.time()
 
@@ -597,11 +619,16 @@ if __name__ == '__main__':
 
     # args.top_episodes = 3  # TODO
     # args.n_episodes = 5
-    # args.er_size = 4
-    # args.wandb = 0
+    # args.er_size = 10
+    # args.model_updates = 10
     # args.steps = 1000
+    # args.team_size = 5#10#0
+    # args.episode_length = args.team_size * 10
+    # args.window = 20
+    #
+    # args.wandb = 0
     # args.single_objective = 0
-    # # args.env = "fraud"
+    # args.env = "fraud"
 
     arg_use_wandb = args.wandb == 1
 
@@ -661,17 +688,20 @@ if __name__ == '__main__':
         # # TODO (90357 yearly) Used for min/max reward
         # episode_length = np.sum(params["trans_per_year"]).astype(int) / 366 * (31 + 29 + 31)
         # 1 week = +- 1728 transactions
+        num_transactions = 2000
         params['end_date'] = datetime(2016, 1, 7).replace(tzinfo=timezone('US/Pacific'))
         episode_length = np.sum(params["trans_per_year"]).astype(int) / 366 * (7)  # (90357) Used for min/max reward
+        episode_length = num_transactions
         # print(episode_length)  # (31) 7653.188524590164, (14) 3456.27868852459, (7) 1728.139344262295
         # exit()
 
         transaction_model = TransactionModel(params, seed=seed)
-        env = TransactionModelMDP(transaction_model, do_reward_shaping=True)
+        env = TransactionModelMDP(transaction_model, do_reward_shaping=True, num_transactions=num_transactions)
 
         # TODO: abstract parameters
         # Continents mapping from default parameters: {'EU': 0, 'AS': 1, 'NA': 2, 'AF': 3, 'OC': 4, 'SA': 5}
         sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=1, other_values=0)
+        # TODO: NA vs EU instead of AS vs EU to increase population size in both
 
     #
     logdir += '/'.join([f'{k}_{v}' for k, v in vars(args).items()]) + '/'
@@ -695,6 +725,21 @@ if __name__ == '__main__':
                                            distance_metric="braycurtis",  # in [0, 1]
                                            alpha=args.fair_alpha,
                                            window=args.window)
+
+    # print("history size:", sys.getsizeof(deepcopy(fairness_framework.history)))
+    from pympler import tracker, muppy, classtracker
+
+    tr = tracker.SummaryTracker()
+    tr.print_diff()
+
+    ctr = classtracker.ClassTracker()
+    ctr.track_object(env)
+    ctr.track_class(FairnessFramework)
+    ctr.track_class(Transition)
+    ctr.track_class(CombinedState)
+    ctr.create_snapshot("before train")
+
+    # exit()
 
     _num_notions = len(all_group_notions) + len(all_individual_notions)
     max_reward = episode_length * 1

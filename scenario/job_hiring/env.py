@@ -152,7 +152,7 @@ class JobHiringEnv(Scenario):
             self._current_team_size += 1
             self._company_state, self._company_entropies = self.generate_company_state(self.previous_state, hire=True)
 
-        # Some employees may leave TODO: overleaf
+        # Some employees may leave
         leaving_employees = self.get_leaving_employees()
         if len(leaving_employees) > 0:
             for employee in leaving_employees:
@@ -176,7 +176,7 @@ class JobHiringEnv(Scenario):
 
         return next_state, reward, done, info
 
-    def get_leaving_employees(self):  # TODO: overleaf
+    def get_leaving_employees(self):
         leaving = []
         # No employees ==> nobody can leave
         if len(self.employees) == 0:
