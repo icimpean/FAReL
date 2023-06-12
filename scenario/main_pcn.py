@@ -351,6 +351,8 @@ def train_fair(env,
     tr.print_diff()
     objgraph.show_most_common_types()
     objgraph.show_growth(limit=15)
+    print("Muppy summary:")
+    muppy.print_summary()
 
     for ep in range(n_er_episodes):
         curr_t = time.time()
@@ -393,6 +395,8 @@ def train_fair(env,
     roots = objgraph.get_leaking_objects()
     print(len(roots), "leaks")
     objgraph.show_most_common_types(objects=roots)
+    print("Muppy summary:")
+    muppy.print_summary()
 
     # exit()
 
@@ -418,6 +422,8 @@ def train_fair(env,
         tr.print_diff()
         ctr.create_snapshot(f"after model updates {update_num}")
         objgraph.show_growth(limit=15)
+        print("Muppy summary:")
+        muppy.print_summary()
 
         desired_return, desired_horizon = choose_commands(experience_replay, n_er_episodes, objectives)
 
@@ -446,6 +452,8 @@ def train_fair(env,
         print("before n_step_episodes")
         tr.print_diff()
         objgraph.show_growth(limit=15)
+        print("Muppy summary:")
+        muppy.print_summary()
         for _ in range(n_step_episodes):
             transitions = run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger,
                                                normalise_state=normalise_state, current_t=step, current_ep=ep)
@@ -460,6 +468,8 @@ def train_fair(env,
         objgraph.show_growth(limit=15)
         total_episodes += n_step_episodes
         ctr.create_snapshot(f"after play episodes {update_num}")
+        print("Muppy summary:")
+        muppy.print_summary()
 
         if use_wandb:
             logger.put('train/episode', total_episodes, step, 'scalar')
@@ -562,6 +572,8 @@ def train_fair(env,
         ctr.create_snapshot(f"after model updates {update_num}")
         ctr.stats.print_summary()
         objgraph.show_growth(limit=15)
+        print("Muppy summary:")
+        muppy.print_summary()
         # exit()
 
 
@@ -625,7 +637,7 @@ if __name__ == '__main__':
     # args.team_size = 5#10#0
     # args.episode_length = args.team_size * 10
     # args.window = 20
-    #
+    # 
     # args.wandb = 0
     # args.single_objective = 0
     # args.env = "fraud"
@@ -738,6 +750,8 @@ if __name__ == '__main__':
     ctr.track_class(Transition)
     ctr.track_class(CombinedState)
     ctr.create_snapshot("before train")
+    print("Muppy summary:")
+    muppy.print_summary()
 
     # exit()
 
