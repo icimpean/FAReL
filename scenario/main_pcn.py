@@ -348,9 +348,9 @@ def train_fair(env,
     experience_replay = []
     print("Experience replay...")
     import objgraph
-    tr.print_diff()
-    objgraph.show_most_common_types()
-    objgraph.show_growth(limit=15)
+    # tr.print_diff()
+    # objgraph.show_most_common_types()
+    # objgraph.show_growth(limit=15)
     print("Muppy summary:")
     muppy.print_summary()
 
@@ -388,13 +388,13 @@ def train_fair(env,
 
     del log_entries
     print("after ER:")
-    tr.print_diff()
-    objgraph.show_growth(limit=15)
-    ctr.create_snapshot("after experience replay 1")
+    # tr.print_diff()
+    # objgraph.show_growth(limit=15)
+    # ctr.create_snapshot("after experience replay 1")
 
-    roots = objgraph.get_leaking_objects()
-    print(len(roots), "leaks")
-    objgraph.show_most_common_types(objects=roots)
+    # roots = objgraph.get_leaking_objects()
+    # print(len(roots), "leaks")
+    # objgraph.show_most_common_types(objects=roots)
     print("Muppy summary:")
     muppy.print_summary()
 
@@ -408,7 +408,7 @@ def train_fair(env,
 
     while step < total_steps:
         print("loop", update_num)
-        tr.print_diff()
+        # tr.print_diff()
 
         loss = []
         entropy = []
@@ -418,12 +418,12 @@ def train_fair(env,
             lp = lp.detach().cpu().numpy()
             ent = np.sum(-np.exp(lp) * lp)
             entropy.append(ent)
-        print("model updates", update_num)
-        tr.print_diff()
-        ctr.create_snapshot(f"after model updates {update_num}")
-        objgraph.show_growth(limit=15)
-        print("Muppy summary:")
-        muppy.print_summary()
+        # print("model updates", update_num)
+        # tr.print_diff()
+        # ctr.create_snapshot(f"after model updates {update_num}")
+        # objgraph.show_growth(limit=15)
+        # print("Muppy summary:")
+        # muppy.print_summary()
 
         desired_return, desired_horizon = choose_commands(experience_replay, n_er_episodes, objectives)
 
@@ -449,11 +449,11 @@ def train_fair(env,
 
         returns = []
         horizons = []
-        print("before n_step_episodes")
-        tr.print_diff()
-        objgraph.show_growth(limit=15)
-        print("Muppy summary:")
-        muppy.print_summary()
+        # print("before n_step_episodes")
+        # tr.print_diff()
+        # objgraph.show_growth(limit=15)
+        # print("Muppy summary:")
+        # muppy.print_summary()
         for _ in range(n_step_episodes):
             transitions = run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger,
                                                normalise_state=normalise_state, current_t=step, current_ep=ep)
@@ -463,13 +463,13 @@ def train_fair(env,
             returns.append(transitions[0].reward)
             horizons.append(len(transitions))
 
-        print("after n_step_episodes")
-        tr.print_diff()
-        objgraph.show_growth(limit=15)
+        # print("after n_step_episodes")
+        # tr.print_diff()
+        # objgraph.show_growth(limit=15)
         total_episodes += n_step_episodes
-        ctr.create_snapshot(f"after play episodes {update_num}")
-        print("Muppy summary:")
-        muppy.print_summary()
+        # ctr.create_snapshot(f"after play episodes {update_num}")
+        # print("Muppy summary:")
+        # muppy.print_summary()
 
         if use_wandb:
             logger.put('train/episode', total_episodes, step, 'scalar')
@@ -567,11 +567,11 @@ def train_fair(env,
                 eval_logger.write_data(entries)
 
         update_num += 1
-        print("end update", update_num)
-        tr.print_diff()
-        ctr.create_snapshot(f"after model updates {update_num}")
-        ctr.stats.print_summary()
-        objgraph.show_growth(limit=15)
+        # print("end update", update_num)
+        # tr.print_diff()
+        # ctr.create_snapshot(f"after model updates {update_num}")
+        # ctr.stats.print_summary()
+        # objgraph.show_growth(limit=15)
         print("Muppy summary:")
         muppy.print_summary()
         # exit()
@@ -626,21 +626,23 @@ if __name__ == '__main__':
     parser.add_argument('--wandb', default=1, type=int, help="use wandb for loggers or save local only")
 
     #
-    args = parser.parse_args()
-    print(args)
-
     # args.top_episodes = 3  # TODO
     # args.n_episodes = 5
     # args.er_size = 10
     # args.model_updates = 10
     # args.steps = 1000
-    # args.team_size = 5#10#0
+    # args.team_size = 100
     # args.episode_length = args.team_size * 10
-    # args.window = 20
-    # 
-    # args.wandb = 0
-    # args.single_objective = 0
-    # args.env = "fraud"
+    # # args.window = 20
+    # #
+    # # args.wandb = 0
+    # # args.single_objective = 0
+    # # args.env = "fraud"
+    # args.seed = 1
+
+    #
+    args = parser.parse_args()
+    print(args)
 
     arg_use_wandb = args.wandb == 1
 
@@ -676,7 +678,7 @@ if __name__ == '__main__':
         diversity_weight = args.diversity_weight
         # Training environment
         population_file = f'./scenario/job_hiring/data/{args.population}.csv'
-        if not on_vsc:
+        if not on_vsc and args.vsc != 2:
             population_file = "." + population_file
         applicant_generator = ApplicantGenerator(csv=population_file, seed=seed)
         env = JobHiringEnv(team_size=team_size, seed=seed, episode_length=episode_length,  # Required ep length for pcn
@@ -700,9 +702,9 @@ if __name__ == '__main__':
         # # TODO (90357 yearly) Used for min/max reward
         # episode_length = np.sum(params["trans_per_year"]).astype(int) / 366 * (31 + 29 + 31)
         # 1 week = +- 1728 transactions
-        num_transactions = 2000
+        num_transactions = 1000  # 2000
         params['end_date'] = datetime(2016, 1, 7).replace(tzinfo=timezone('US/Pacific'))
-        episode_length = np.sum(params["trans_per_year"]).astype(int) / 366 * (7)  # (90357) Used for min/max reward
+        # episode_length = np.sum(params["trans_per_year"]).astype(int) / 366 * (7)  # (90357) Used for min/max reward
         episode_length = num_transactions
         # print(episode_length)  # (31) 7653.188524590164, (14) 3456.27868852459, (7) 1728.139344262295
         # exit()
@@ -712,8 +714,9 @@ if __name__ == '__main__':
 
         # TODO: abstract parameters
         # Continents mapping from default parameters: {'EU': 0, 'AS': 1, 'NA': 2, 'AF': 3, 'OC': 4, 'SA': 5}
-        sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=1, other_values=0)
-        # TODO: NA vs EU instead of AS vs EU to increase population size in both
+        # sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=1, other_values=0)
+        # NA vs EU instead of AS vs EU to increase population size in both
+        sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=2, other_values=0)
 
     #
     logdir += '/'.join([f'{k}_{v}' for k, v in vars(args).items()]) + '/'
@@ -738,20 +741,19 @@ if __name__ == '__main__':
                                            alpha=args.fair_alpha,
                                            window=args.window)
 
-    # print("history size:", sys.getsizeof(deepcopy(fairness_framework.history)))
     from pympler import tracker, muppy, classtracker
 
-    tr = tracker.SummaryTracker()
-    tr.print_diff()
+    # tr = tracker.SummaryTracker()
+    # tr.print_diff()
 
-    ctr = classtracker.ClassTracker()
-    ctr.track_object(env)
-    ctr.track_class(FairnessFramework)
-    ctr.track_class(Transition)
-    ctr.track_class(CombinedState)
-    ctr.create_snapshot("before train")
-    print("Muppy summary:")
-    muppy.print_summary()
+    # ctr = classtracker.ClassTracker()
+    # ctr.track_object(env)
+    # ctr.track_class(FairnessFramework)
+    # ctr.track_class(Transition)
+    # ctr.track_class(CombinedState)
+    # ctr.create_snapshot("before train")
+    # print("Muppy summary:")
+    # muppy.print_summary()
 
     # exit()
 
