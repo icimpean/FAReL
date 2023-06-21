@@ -30,14 +30,16 @@ if __name__ == '__main__':
 
     parameters = []
     for env in environments:
-        for seed in seeds:
+        # for seed in seeds:
             for pop in populations[env]:
                 for (size, length) in team_sizes_eps_length[env]:
                     for div_w in diversity_weights[env]:
                         obj = objectives[env]
+
+                        # for o in range(7):
                         steps = num_steps[env]
-                        entry = {"env": env, "seed": seed, #"objectives": obj,
-                                 "steps": steps,
+                        entry = {"env": env, #"seed": seed, #"objectives": obj,
+                                 "steps": steps, "single_objective": "${o}",
                                  "team_size": size, "episode_length": length, "diversity_weight": div_w,
                                  "population": pop, "window": window, "fair_alpha": fair_alpha}
                         parameters.append(entry)
@@ -50,7 +52,7 @@ if __name__ == '__main__':
                         # break
                     # break
                 # break
-            break
+            # break
     import csv
 
     path = "fair_configs2.csv"

@@ -1,3 +1,5 @@
+from copy import copy
+
 import numpy as np
 from scipy.spatial.distance import minkowski, braycurtis
 
@@ -148,7 +150,7 @@ class JobHiringEnv(Scenario):
         reward = rewards[hiring_action]
 
         if hiring_action == HiringActions.hire:
-            self.employees.append(self.previous_state.sample_individual)
+            self.employees.append(self.new_employee(self.previous_state))
             self._current_team_size += 1
             self._company_state, self._company_entropies = self.generate_company_state(self.previous_state, hire=True)
 
@@ -176,6 +178,20 @@ class JobHiringEnv(Scenario):
 
         return next_state, reward, done, info
 
+    def add_leave_prob(self, employee):
+        # Employees probability to change/leave jobs based on age
+        if self.employment_transitions is not None:
+            age_idx = (employee[HiringFeature.age] - 15) // 10
+            weight = self.employment_transitions[age_idx]
+            employee["_weight_"] = weight
+        return employee
+
+    def new_employee(self, state):
+        emp = copy(state.sample_individual)
+        emp["_languages_"] = [get_language(lan).value for lan in LANGUAGE_FEATURES if emp[lan]]
+        emp = self.add_leave_prob(emp)
+        return emp
+
     def get_leaving_employees(self):
         leaving = []
         # No employees ==> nobody can leave
@@ -183,13 +199,14 @@ class JobHiringEnv(Scenario):
             return leaving
         # Employees probability to change/leave jobs based on age
         if self.employment_transitions is not None:
-            ages_idx = [(e[HiringFeature.age] - 15) // 10 for e in self.employees]
-            weights = [self.employment_transitions[age_idx] for age_idx in ages_idx]
+            # ages_idx = [(e[HiringFeature.age] - 15) // 10 for e in self.employees]
+            # weights = [self.employment_transitions[age_idx] for age_idx in ages_idx]
+            weights = [e["_weight_"] for e in self.employees]
             employees_p = np.array(weights) / np.sum(weights)
             # Pick an employee
             employee_idx = self.rng.choice(range(len(employees_p)), p=employees_p)
             employee = self.employees[employee_idx]
-            leave_prob = self.employment_transitions[ages_idx[employee_idx]]
+            leave_prob = employee["_weight_"]
             if leave_prob > self.rng.random():
                 print("Employee left:", employee)
                 leaving.append(employee)
@@ -245,7 +262,7 @@ class JobHiringEnv(Scenario):
         employees_features = self._team_composition if hire else self._team_composition[:]
         employees_features.append(applicant_features)
         employees = self.employees if hire else self.employees[:]
-        employees.append(state.sample_individual)
+        employees.append(self.new_employee(state))
         #
         employees_start_t = self._team_start_t if hire else self._team_start_t[:]
         employees_start_t.append(self._t)
@@ -270,7 +287,9 @@ class JobHiringEnv(Scenario):
         nationality_probs, nationality_diversity = self._entropy(nationalities, base=2)
         # print("nationality_diversity", nationalities, "==>", nationality_diversity)
 
-        languages = [get_language(lan).value for emp in employees for lan in LANGUAGE_FEATURES if emp[lan]]
+        # languages = [get_language(lan).value for emp in employees for lan in LANGUAGE_FEATURES if emp[lan]]
+        languages = [l for emp in employees for l in emp["_languages_"]]
+        # print("languages", languages)
         language_probs, language_entropy = self._entropy(languages, base=len(LANGUAGE_FEATURES))
         # print("language_entropy", languages, "==>", language_entropy)
 
@@ -298,6 +317,8 @@ class JobHiringEnv(Scenario):
             CompanyFeature.belgian: nationality_probs[Nationality.belgian.value],
             CompanyFeature.foreign: nationality_probs[Nationality.foreign.value],
         }
+
+        del employees_features
 
         return company_state, (language_entropy, gender_diversity, nationality_diversity)
 

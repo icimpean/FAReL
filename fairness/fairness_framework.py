@@ -13,7 +13,6 @@ class FairnessFramework(object):
     """A fairness framework.
 
     Attributes:
-        env: The environment
         actions: The possible actions for the agent-environment interaction.
         sensitive_attributes: The attributes for which to check fairness.
         threshold: The threshold for defining approximate fairness.
@@ -70,17 +69,19 @@ class FairnessFramework(object):
                 new_dictionary[notion] = {str(attr): [] for attr in self.sensitive_attributes}
         return new_dictionary
 
-    def update_history(self, state, action, true_action, score, reward):
+    def update_history(self, episode, t, state, action, true_action, score, reward):
         """Update the framework with a new observed tuple
 
         Args:
+            episode: The episode where the interaction took place
+            t: The timestep of the interaction
             state: The observed state
             action: The action taken in that state
             true_action: The correct action according to the ground truth of the problem
             score: The score assigned by the agent for the given state, or state-action pair
             reward: The reward received for the given action
         """
-        self.history.update(state, action, true_action, score, reward)
+        self.history.update(episode, t, state, action, true_action, score, reward)
         # Group notions
         for notion in self.group_notions:
             for sensitive_attribute in self.sensitive_attributes:
@@ -117,12 +118,16 @@ class FairnessFramework(object):
 
 class ExtendedfMDP(object):
     """An extended job hiring fMDP, with a fairness framework"""
-    def __init__(self, job_hiring_env, fairness_framework: FairnessFramework):
+    def __init__(self, env, fairness_framework: FairnessFramework):
         # Super call
         super(ExtendedfMDP, self).__init__()
         #
-        self.job_hiring_env = job_hiring_env
+        self.env = env
         self.fairness_framework = fairness_framework
+
+        #
+        self._t = -1
+        self._episode = -1
 
         # Objective names
         self.obj_names = ["reward"]
@@ -137,15 +142,18 @@ class ExtendedfMDP(object):
             self.obj_names.append(notion.name)
 
     def reset(self):
-        return self.job_hiring_env.reset()
+        self._t += 1
+        self._episode += 1
+        return self.env.reset()
 
     def step(self, action, scores=None):
-        next_state, reward, done, info = self.job_hiring_env.step(action)
+        next_state, reward, done, info = self.env.step(action)
 
         true_action = info.get("true_action")
         if true_action is None:
             true_action = -1
-        self.fairness_framework.update_history(self.job_hiring_env.previous_state, action, true_action, scores, reward)
+        self.fairness_framework.update_history(self._episode, self._t,
+                                               self.env.previous_state, action, true_action, scores, reward)
 
         # Add fairness notions as additional rewards
         reward = [reward]
@@ -166,7 +174,9 @@ class ExtendedfMDP(object):
                                                               self.fairness_framework.distance_metric)
             reward.append(diff)
 
+        self._t += 1
+
         return next_state, reward, done, info
 
     def normalise_state(self, state: CombinedState):
-        return self.job_hiring_env.normalise_state(state)
+        return self.env.normalise_state(state)

@@ -1,10 +1,9 @@
-import os
 from enum import Enum
 from itertools import groupby
 from multiprocessing import Pool
 
 import numpy as np
-from aif360.sklearn.metrics import consistency_score, generalized_entropy_index
+from aif360.sklearn.metrics import consistency_score
 from sklearn.neighbors import NearestNeighbors
 from sklearn.utils import check_X_y
 
@@ -22,8 +21,6 @@ def dict_to_array(d):
     return np.array(a, dtype=float)
 
 
-# def key_state(s, get_individual):
-#     return str(dict_to_array(get_individual(s)))
 def key_state(s, get_individual):
     return str(dict_to_array(s))
 
@@ -139,10 +136,11 @@ class IndividualFairness(IndividualFairnessBase):
         # print(results[:10])
         # print(combos, "results, of which", len(previous_results), "were previously calculated")
         total = []
+        new_individual_comparisons = {}
         for i, j, fair, diff, D, d in results:
             id_i, id_j = ids[i], ids[j]
             comp_id = id_i + id_j
-            self._individual_comparisons[comp_id] = (i, j, fair, diff, D, d)
+            new_individual_comparisons[comp_id] = (i, j, fair, diff, D, d)
             total.append(diff)
 
             # Exact fair
@@ -170,6 +168,8 @@ class IndividualFairness(IndividualFairnessBase):
 
         # print(u, "/", combos, "unsatisfied_pairs")
         # print((exact, approx), diff, ([], unsatisfied_pairs, difference_per_pair))
+        self._individual_comparisons = new_individual_comparisons
+
         return (exact, approx), diff, ([], unsatisfied_pairs, difference_per_pair)
 
     def weakly_meritocratic(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=0,

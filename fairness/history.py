@@ -15,12 +15,14 @@ class History(object):
         self.rewards = deque(maxlen=self.window)
         self.ids = deque(maxlen=self.window)
         self.feature_values = {}
-        self.histograms = {}
+        # self.histograms = {}
 
-    def update(self, state, action, true_action, score, reward):
+    def update(self, episode, t, state, action, true_action, score, reward):
         """Update the history with a newly observed tuple
 
         Args:
+            episode: The episode where the interaction took place
+            t: The timestep of the interaction
             state: The observed state
             action: The action taken in that state
             true_action: The correct action according to the ground truth of the problem
@@ -32,7 +34,7 @@ class History(object):
         self.true_actions.append(true_action)
         self.scores.append(score)
         self.rewards.append(reward)
-        self.ids.append(str(state)+str(action)+str(true_action))
+        self.ids.append(f"E{episode}T{t}")
 
         features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
 
@@ -46,18 +48,18 @@ class History(object):
                 value = value.value
             self.feature_values[feature].append(value)
 
-        if len(self.states) > 1:
-            for feature in features:
-                values = self.feature_values[feature]
-                uniques = len(np.unique(values))
-                if uniques < 5:
-                    bins = uniques
-                else:
-                    bins = "fd"
-                # print("bins:", bins)
-                counts, bin_edges = np.histogram(values, bins=bins, density=True)
-                counts = counts * np.diff(bin_edges)
-                self.histograms[feature] = (counts, bin_edges)
+        # if len(self.states) > 1:
+        #     for feature in features:
+        #         values = self.feature_values[feature]
+        #         uniques = len(np.unique(values))
+        #         if uniques < 5:
+        #             bins = uniques
+        #         else:
+        #             bins = "fd"
+        #         print("bins:", bins)
+        #         counts, bin_edges = np.histogram(values, bins=bins, density=True)
+        #         counts = counts * np.diff(bin_edges)
+        #         self.histograms[feature] = (counts, bin_edges)
 
     def get_history(self):
         """Get history"""
