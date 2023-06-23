@@ -510,6 +510,9 @@ if __name__ == '__main__':
                         help='the name of the population file')
     # Fraud detection parameters
     # TODO
+    parser.add_argument('--n_transactions', default=1000, type=int, help='number of transactions per episode')
+    parser.add_argument('--fraud_proportion', default=0, type=float,
+                        help='proportion of fraudulent transactions to genuine. 0 defaults to default MultiMAuS parameters')
     # Fairness framework
     parser.add_argument('--window', default=100, type=int, help='fairness framework window')
     parser.add_argument('--fair_alpha', default=0.1, type=float, help='fairness framework alpha for similarity metric')
@@ -533,6 +536,7 @@ if __name__ == '__main__':
     # # args.env = "fraud"
     # args.seed = 1
     # no_save = True  # TODO
+    # args.fraud_proportion = 0#.20
 
     print(args)
 
@@ -593,12 +597,14 @@ if __name__ == '__main__':
         # # TODO (90357 yearly) Used for min/max reward
         # episode_length = np.sum(params["trans_per_year"]).astype(int) / 366 * (31 + 29 + 31)
         # 1 week = +- 1728 transactions
-        num_transactions = 1000  # 2000
+        num_transactions = args.n_transactions  # 1000
         params['end_date'] = datetime(2016, 1, 7).replace(tzinfo=timezone('US/Pacific'))
         # episode_length = np.sum(params["trans_per_year"]).astype(int) / 366 * (7)  # (90357) Used for min/max reward
         episode_length = num_transactions
-        # print(episode_length)  # (31) 7653.188524590164, (14) 3456.27868852459, (7) 1728.139344262295
-        # exit()
+        if args.fraud_proportion != 0:
+            curr_sum = np.sum(params['trans_per_year'])
+            params['trans_per_year'] = np.array([curr_sum * (1 - args.fraud_proportion),
+                                                 curr_sum * args.fraud_proportion])
 
         transaction_model = TransactionModel(params, seed=seed)
         env = TransactionModelMDP(transaction_model, do_reward_shaping=True, num_transactions=num_transactions)
