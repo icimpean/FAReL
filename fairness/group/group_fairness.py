@@ -1,3 +1,4 @@
+from fairness import SensitiveAttribute, ppv, npv, fpr, tpr
 from fairness.group import GroupFairnessBase, GroupNotion
 from fairness.history import History
 
@@ -34,11 +35,11 @@ class GroupFairness(GroupFairnessBase):
         }
 
     def get_notion(self, group_notion: GroupNotion, history: History,
-                   feature, sensitive_value, other_value=None, threshold=None):
+                   sensitive_attribute: SensitiveAttribute, threshold=None):
         # noinspection PyArgumentList
-        return self._map[group_notion](history, feature, sensitive_value, other_value, threshold)
+        return self._map[group_notion](history, sensitive_attribute, threshold)
 
-    def statistical_parity(self, history: History, feature, sensitive_value, other_value=None, threshold=None):
+    def statistical_parity(self, history: History, sensitive_attribute: SensitiveAttribute, threshold=None):
         """Predicted acceptance rates for both protected and unprotected groups should be equal.
 
         P(y_pred = 1 | feature = sensitive_value)
@@ -52,9 +53,9 @@ class GroupFairness(GroupFairnessBase):
             TN, FP, FN, TP = confusion_matrix.ravel()
             return (TP + FP) / (TP + FP + FN + TN)
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, _calc, sensitive_attribute, threshold)
 
-    def equal_opportunity(self, history: History, feature, sensitive_value, other_value=None, threshold=None):
+    def equal_opportunity(self, history: History, sensitive_attribute: SensitiveAttribute, threshold=None):
         """Select equal proportions of individuals from the qualified fraction of each group.
 
         P(y_pred = 1 | y_true = 1, feature = sensitive_value)
@@ -64,12 +65,10 @@ class GroupFairness(GroupFairnessBase):
         Using confusion matrix:
         TPR = TP / (TP + FN) should be equal for both groups.
         """
-        def _calc(confusion_matrix):
-            return self.CM.tpr(confusion_matrix)
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, tpr, sensitive_attribute, threshold)
 
-    def predictive_equality(self, history: History, feature, sensitive_value, other_value=None, threshold=None):
+    def predictive_equality(self, history: History, sensitive_attribute: SensitiveAttribute, threshold=None):
         """Select equal proportions of individuals from the unqualified fraction of each group.
 
         P(y_pred = 1 | y_true = 0, feature = sensitive_value)
@@ -79,13 +78,11 @@ class GroupFairness(GroupFairnessBase):
         Using confusion matrix:
         FPR = FP / (FP + TN) should be equal for both groups.
         """
-        def _calc(confusion_matrix):
-            return self.CM.fpr(confusion_matrix)
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, fpr, sensitive_attribute, threshold)
 
-    def equalized_odds(self, history: History, feature, sensitive_value, other_value=None, threshold=None):
-        """Prediction is conditionally independent from the sensitive attribute, given the actual outcome.
+    def equalized_odds(self, history: History, sensitive_attribute: SensitiveAttribute, threshold=None):
+        """Prediction is conditionally independent of the sensitive attribute, given the actual outcome.
 
         P(y_pred = 1 | y_true = y, feature = sensitive_value)
                 ==
@@ -97,11 +94,11 @@ class GroupFairness(GroupFairnessBase):
         """
         # equalized_odds == equal_opportunity AND predictive_equality
         def _calc(confusion_matrix):
-            return self.CM.fpr(confusion_matrix), self.CM.tpr(confusion_matrix)  # (y = reject, y = hire)
+            return fpr(confusion_matrix), tpr(confusion_matrix)  # (y = reject, y = hire)
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, _calc, sensitive_attribute, threshold)
 
-    def overall_accuracy_equality(self, history: History, feature, sensitive_value, other_value=None, threshold=None):
+    def overall_accuracy_equality(self, history: History, sensitive_attribute: SensitiveAttribute, threshold=None):
         """Overall accuracy is the same for both groups.
 
         P(y_pred = y_true | feature = sensitive_value)
@@ -115,9 +112,9 @@ class GroupFairness(GroupFairnessBase):
             TN, FP, FN, TP = confusion_matrix.ravel()
             return (TP + TN) / (TP + FN + FP + TN)
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, _calc, sensitive_attribute, threshold)
 
-    def predictive_parity(self, history: History, feature, sensitive_value, other_value=None, threshold=None):
+    def predictive_parity(self, history: History, sensitive_attribute: SensitiveAttribute, threshold=None):
         """Select equal proportions of individuals from the qualified fraction of each group.
 
         P(y_pred = 1 | y_true = 1, feature = sensitive_value)
@@ -127,12 +124,10 @@ class GroupFairness(GroupFairnessBase):
         Using confusion matrix:
         PPV = TP / (TP + FP) should be equal for both groups.
         """
-        def _calc(confusion_matrix):
-            return self.CM.ppv(confusion_matrix)
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, ppv, sensitive_attribute, threshold)
 
-    def conditional_use_accuracy_equality(self, history: History, feature, sensitive_value, other_value=None,
+    def conditional_use_accuracy_equality(self, history: History, sensitive_attribute: SensitiveAttribute,
                                           threshold=None):
         """The probability of subjects with positive predictive value to truly belong to the positive class
         and the probability of subjects with negative predictive value to truly belong to the negative class
@@ -146,11 +141,11 @@ class GroupFairness(GroupFairnessBase):
         PPV and NPV should be equal for both groups.
         """
         def _calc(confusion_matrix):
-            return self.CM.npv(confusion_matrix), self.CM.ppv(confusion_matrix)  # (y = reject, y = hire)
+            return npv(confusion_matrix), ppv(confusion_matrix)  # (y = reject, y = hire)
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, _calc, sensitive_attribute, threshold)
 
-    def treatment_equality(self, history: History, feature, sensitive_value, other_value=None, threshold=None):
+    def treatment_equality(self, history: History, sensitive_attribute: SensitiveAttribute, threshold=None):
         """Ratio of FNs and FPs is the same for both groups.
 
         Using confusion matrix:
@@ -160,4 +155,4 @@ class GroupFairness(GroupFairnessBase):
             TN, FP, FN, TP = confusion_matrix.ravel()
             return FN / FP
 
-        return self._fairness_notion(history, _calc, feature, sensitive_value, other_value, threshold)
+        return self._fairness_notion(history, _calc, sensitive_attribute, threshold)

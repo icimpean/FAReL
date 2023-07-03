@@ -1,8 +1,5 @@
 from copy import copy
 
-import numpy as np
-from scipy.spatial.distance import minkowski, braycurtis
-
 from scenario.job_hiring.features import *
 from scenario import Scenario, CombinedState
 
@@ -65,7 +62,12 @@ class JobHiringEnv(Scenario):
                  goodness_noise=GOODNESS_NOISE, noise_hire=NOISE_HIRE,
                  goodness_biases=None, reward_biases=None):
         # Super call
-        super(JobHiringEnv, self).__init__(seed=seed)
+        features = [feature for feature in HiringFeature]
+        nominal_features = [HiringFeature.gender, HiringFeature.married,
+                            HiringFeature.nationality, *LANGUAGE_FEATURES]
+        numerical_features = [f for f in features if f not in nominal_features]
+        super(JobHiringEnv, self).__init__(features=features, nominal_features=nominal_features,
+                                           numerical_features=numerical_features, seed=seed)
         #
         if team_size and episode_length:
             assert episode_length >= team_size, \
@@ -78,10 +80,6 @@ class JobHiringEnv(Scenario):
         self.diversity_weight = diversity_weight
 
         # Job applicant features
-        self.features = [feature for feature in HiringFeature]
-        self.nominal_features = [HiringFeature.gender, HiringFeature.married, HiringFeature.nationality,
-                                 *LANGUAGE_FEATURES]
-        self.numerical_features = [f for f in self.features if f not in self.nominal_features]
         self.applicant_generator = ApplicantGenerator(seed=self.seed) \
             if applicant_generator is None else applicant_generator
         # Company/Employer features
@@ -380,46 +378,6 @@ class JobHiringEnv(Scenario):
         # Return the rewards
         rewards = {HiringActions.reject: reward_reject, HiringActions.hire: reward_hire}
         return rewards
-
-    # noinspection PyUnboundLocalVariable
-    def similarity_metric(self, state1: CombinedState, state2: CombinedState, distance="HMOM", alpha=1.0, exp=True):
-        if distance.startswith("H") and distance.endswith("OM"):
-            num1 = np.array(self._normalise_features(state1, self.numerical_features))
-            nom1 = np.array(state1.get_features(self.nominal_features))
-            num2 = np.array(self._normalise_features(state2, self.numerical_features))
-            nom2 = np.array(state2.get_features(self.nominal_features))
-
-        # Heterogeneous Euclidean-Overlap Metric (HEOM)
-        if distance == 'HEOM':
-            d = np.sum(np.abs(num1 - num2)) + np.sum(nom1 != nom2)
-        # Heterogeneous Manhattan-Overlap Metric (HMOM)
-        elif distance == 'HMOM':
-            d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
-        # Minkowski distance between two 1-D arrays (minkowski)
-        elif distance == "minkowski":
-            d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
-            return d
-        elif distance == "braycurtis":
-            d = self.braycurtis_metric(state1, state2, w=None)  # TODO: absract w together with consistency score
-            return d
-        else:
-            raise ValueError(f"Expected distance: HEOM, HMOM or minkowski. Got: {distance}")
-
-        return np.exp(-alpha * d) if exp else d
-
-    def minkowski_metric(self, state1: CombinedState, state2: CombinedState, p=2, w=None):
-        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
-                               state1.get_features(self.nominal_features, as_array=True)])
-        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
-                               state2.get_features(self.nominal_features, as_array=True)])
-        return minkowski(norm1, norm2, p=p, w=w)
-
-    def braycurtis_metric(self, state1: CombinedState, state2: CombinedState, w=None):
-        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
-                               state1.get_features(self.nominal_features, as_array=True)])
-        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
-                               state2.get_features(self.nominal_features, as_array=True)])
-        return braycurtis(norm1, norm2, w=w)
 
     def _normalise_features(self, state: CombinedState, features: List[HiringFeature] = None):
         new_values = self.applicant_generator.normalise_features(state.sample_dict, features)

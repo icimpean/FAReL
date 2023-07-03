@@ -517,6 +517,11 @@ if __name__ == '__main__':
     parser.add_argument('--window', default=100, type=int, help='fairness framework window')
     parser.add_argument('--fair_alpha', default=0.1, type=float, help='fairness framework alpha for similarity metric')
     parser.add_argument('--wandb', default=1, type=int, help="(Ignored, overrides to 0) use wandb for loggers or save local only")
+    parser.add_argument('--no_window', default=0, type=int, help="Use the full history instead of a window")
+    parser.add_argument('--no_individual', default=0, type=int, help="No individual fairness notions")
+    #
+    parser.add_argument('--log_dir', default='new_experiment', type=str, help="Directory where to store results")
+
 
     args = parser.parse_args()
     no_save = False
@@ -529,7 +534,11 @@ if __name__ == '__main__':
     # args.steps = 10000
     # args.team_size = 100
     # args.episode_length = args.team_size * 10
-    # # args.window = 20
+    # args.window = 100
+    # args.window = None
+    # args.no_individual = 1
+    # args.default_objectives = 1
+    # args.no_window = 1
     # #
     #
     # # args.single_objective = 0
@@ -537,6 +546,7 @@ if __name__ == '__main__':
     # args.seed = 1
     # no_save = True  # TODO
     # args.fraud_proportion = 0#.20
+    # args.log_dir = "./experiment/seed_44/window_2"
 
     print(args)
 
@@ -553,10 +563,17 @@ if __name__ == '__main__':
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+    if args.no_window:
+        args.window = None
+
     if args.default_objectives:
         print("Default env objective:", args.objectives)
         args.objectives = [0, 1, 2, 5] if is_job_hiring else [0, 3, 4, 6]
+        if args.no_individual:
+            args.objectives = [0, 1, 2] if is_job_hiring else [0, 3, 4]
     if args.single_objective != -1:
+        if args.no_individual:
+            assert args.single_objective < 5, "No individual fairness supported with given arguments"
         args.objectives = [args.single_objective]
         print("Single objective:", args.objectives)
 
@@ -616,7 +633,8 @@ if __name__ == '__main__':
         sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=2, other_values=0)
 
     #
-    logdir += '/'.join([f'{k}_{v}' for k, v in vars(args).items()]) + '/'
+    # logdir += '/'.join([f'{k}_{v}' for k, v in vars(args).items()]) + '/'
+    logdir += args.log_dir + "/"
     # logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S_') + str(uuid.uuid4())[:4] + '/'
     logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S/')
     os.makedirs(logdir, exist_ok=True)
@@ -627,6 +645,8 @@ if __name__ == '__main__':
     all_group_notions = [GroupNotion.StatisticalParity, GroupNotion.EqualOpportunity,
                          GroupNotion.OverallAccuracyEquality, GroupNotion.PredictiveParity]
     all_individual_notions = [IndividualNotion.IndividualFairness, IndividualNotion.ConsistencyScoreComplement]
+    if args.no_individual:
+        all_individual_notions = []
 
     fairness_framework = FairnessFramework([a for a in HiringActions], sensitive_attribute,
                                            individual_notions=all_individual_notions,
@@ -636,7 +656,8 @@ if __name__ == '__main__':
                                            # distance_metric="minkowski",
                                            distance_metric="braycurtis",  # in [0, 1]
                                            alpha=args.fair_alpha,
-                                           window=args.window)
+                                           window=args.window,
+                                           store_interactions=False, has_individual_fairness=not args.no_individual)
 
     _num_notions = len(all_group_notions) + len(all_individual_notions)
     max_reward = episode_length * 1

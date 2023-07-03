@@ -2,9 +2,8 @@ from enum import Enum, auto
 from typing import List
 
 import numpy as np
-from scipy.spatial.distance import minkowski, braycurtis
 
-from scenario import CombinedState, Feature
+from scenario import CombinedState, Feature, Scenario
 from scenario.fraud_detection.MultiMAuS.simulator.customers import BaseCustomer
 from scenario.fraud_detection.MultiMAuS.simulator.transaction_model import TransactionModel
 
@@ -34,14 +33,34 @@ context_features = [FraudFeature.satisfaction, FraudFeature.fraud_percentage]
 individual_features = [f for f in FraudFeature if f not in context_features]
 
 
-class TransactionModelMDP(object):
+class TransactionModelMDP(Scenario):
     def __init__(self, transaction_model, do_reward_shaping=False, num_transactions=None):
+        # Super call
+        features = [feature for feature in FraudFeature]
+        nominal_features = [FraudFeature.card_id, FraudFeature.merchant_id, FraudFeature.country,
+                            FraudFeature.continent, FraudFeature.currency]
+        numerical_features = [  # FraudFeatures.satisfaction, FraudFeatures.fraud_percentage,
+            # ==> fraud company features, not individual for fairness notion
+            FraudFeature.month, FraudFeature.day, FraudFeature.weekday, FraudFeature.hour, FraudFeature.amount]
+        super(TransactionModelMDP, self).__init__(features=features, nominal_features=nominal_features,
+                                                  numerical_features=numerical_features,
+                                                  seed=transaction_model.parameters["seed"])
+        #
         self.transaction_model = transaction_model
         self.do_reward_shaping = do_reward_shaping
         self.num_transactions = num_transactions
         self._params = self.transaction_model.parameters
         self.input_shape = NUM_FRAUD_FEATURES
         self.actions = [a for a in FraudActions]
+        self.maxima = {
+            f: self._get_max_norm(f)
+            for f in ("frac_month", "frac_monthday", "frac_weekday", "frac_hour", "country_frac")
+        }
+        self.maxima["card_id"] = 10000
+        self.maxima["merchant_id"] = max(1, len(self.transaction_model.merchants) - 1)
+        self.maxima["continent"] = max(1, len(self.transaction_model.continents) - 1)
+        self.maxima["amount"] = 8000
+        self.maxima["currency"] = max(1, len(self.transaction_model.currencies) - 1)
 
         # Don't know (full) next state beforehand with this model => update once next transaction is seen
         self.previous_state = None
@@ -58,12 +77,6 @@ class TransactionModelMDP(object):
         self.scheduler = self.transaction_model.schedule
         self.transaction_model.pre_step()
         self._buffer = self.scheduler.agent_buffer(shuffled=True)
-
-        #
-        self.nominal_features = [FraudFeature.card_id, FraudFeature.merchant_id, FraudFeature.country,
-                                 FraudFeature.continent, FraudFeature.currency]
-        self.numerical_features = [#FraudFeatures.satisfaction, FraudFeatures.fraud_percentage, ==> fraud company features, not individual for fairness notion
-                                   FraudFeature.month, FraudFeature.day, FraudFeature.weekday, FraudFeature.hour, FraudFeature.amount]
 
     @staticmethod
     def full_state(customer: BaseCustomer, transaction_model: TransactionModel):
@@ -83,8 +96,6 @@ class TransactionModelMDP(object):
         gt = transaction_model.genuine_transactions
         st = ft + gt
         fraud_percentage = 0 if st == 0 else ft / st
-
-        # print(customer.card_id, customer.curr_merchant.unique_id)
 
         state = np.array([
             # Company satisfaction
@@ -106,7 +117,6 @@ class TransactionModelMDP(object):
             customer.curr_amount,
             currency,
         ])
-        # state = np.array([get_state(customer)])
         state = CombinedState.from_array(state, context_features=context_features,
                                          individual_features=individual_features)
 
@@ -170,20 +180,6 @@ class TransactionModelMDP(object):
         return self.state, self.reward, self.done, self.info
 
     def authorise_transaction(self, customer, action):
-        # get the current state we will show to the agent
-        # state = full_state(customer, self.transaction_model)
-        # self.state = state
-
-        # # Update previous timestep
-        # if self.previous_state is not None:
-        #     # Store the experience in memory and train the agent
-        #     experience = Experience(self.previous_state, self.action, self.reward, self.done, self.state, None)
-        #     self.agent.store_experience(experience)
-        #     agent_loss = self.agent.train(self.t - 1)
-
-        # call the step function of the model
-        # action = self.agent.select_action(self.state, self.t, episode=0)
-
         # ask the user for authentication
         auth_result = 1
         if action:
@@ -226,49 +222,6 @@ class TransactionModelMDP(object):
                      else FraudActions.ignore.value, "fraudster": customer.fraudster}
         self.t += 1
 
-    # noinspection PyUnboundLocalVariable
-    def similarity_metric(self, state1, state2, distance="HMOM", alpha=1.0, exp=True):
-        if distance.startswith("H") and distance.endswith("OM"):
-            n_state1 = self.normalise_state(state1)
-            n_state2 = self.normalise_state(state2)
-
-            num1 = np.array([n_state1[f.value] for f in self.numerical_features])
-            nom1 = np.array([n_state1[f.value] for f in self.nominal_features])
-            num2 = np.array([n_state2[f.value] for f in self.numerical_features])
-            nom2 = np.array([n_state2[f.value] for f in self.nominal_features])
-
-        # Heterogeneous Euclidean-Overlap Metric (HEOM)
-        if distance == 'HEOM':
-            d = np.sum(np.abs(num1 - num2)) + np.sum(nom1 != nom2)
-        # Heterogeneous Manhattan-Overlap Metric (HMOM)
-        elif distance == 'HMOM':
-            d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
-        # Minkowski distance between two 1-D arrays (minkowski)
-        elif distance == "minkowski":
-            d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
-            return d
-        elif distance == "braycurtis":
-            d = self.braycurtis_metric(state1, state2, w=None)  # TODO: absract w together with consistency score
-            return d
-        else:
-            raise ValueError(f"Expected distance: HEOM, HMOM or minkowski. Got: {distance}")
-
-        return np.exp(-alpha * d) if exp else d
-
-    def minkowski_metric(self, state1: CombinedState, state2: CombinedState, p=2, w=None):
-        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
-                               state1.get_features(self.nominal_features, as_array=True)])
-        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
-                               state2.get_features(self.nominal_features, as_array=True)])
-        return minkowski(norm1, norm2, p=p, w=w)
-
-    def braycurtis_metric(self, state1: CombinedState, state2: CombinedState, w=None):
-        norm1 = np.concatenate([self._normalise_features(state1, self.numerical_features),
-                               state1.get_features(self.nominal_features, as_array=True)])
-        norm2 = np.concatenate([self._normalise_features(state2, self.numerical_features),
-                               state2.get_features(self.nominal_features, as_array=True)])
-        return braycurtis(norm1, norm2, w=w)
-
     def _normalise_features(self, state: CombinedState, features: List[FraudFeature] = None):
         if features is None:
             features = [f for f in FraudFeature]
@@ -290,20 +243,20 @@ class TransactionModelMDP(object):
         norm_array = np.array([
             sat,
             fraud_per,
-            month / self._get_max_norm("frac_month"),
-            day / self._get_max_norm("frac_monthday"),
-            weekday / self._get_max_norm("frac_weekday"),
-            hour / self._get_max_norm("frac_hour"),
-            card_id / 10000,
-            merchant_id / max(1, len(self.transaction_model.merchants) - 1),
-            country / self._get_max_norm("country_frac"),
-            continent / max(1, len(self.transaction_model.continents) - 1),
-            amount / 8000,
-            currency / max(1, len(self.transaction_model.currencies) - 1),
+            month / self.maxima["frac_month"],
+            day / self.maxima["frac_monthday"],
+            weekday / self.maxima["frac_weekday"],
+            hour / self.maxima["frac_hour"],
+            card_id / self.maxima["card_id"],
+            merchant_id / self.maxima["merchant_id"],
+            country / self.maxima["country_frac"],
+            continent / self.maxima["continent"],
+            amount / self.maxima["amount"],
+            currency / self.maxima["currency"],
         ])
         return norm_array
 
-    def get_individual(self, state, normalise=True):
+    def get_individual(self, state: CombinedState, normalise=True):
         if normalise:
             return self._normalise_features(state, individual_features)
         else:

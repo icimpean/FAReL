@@ -26,7 +26,6 @@ class GroupFairnessBase(object):
         self.actions = actions
         self.action_order = [a.value for a in self.actions]
         self.labels = [a.name for a in self.actions]
-        self.CM = ConfusionMatrix(self.actions)
 
     @staticmethod
     def _is_value(x, feature, value):
@@ -67,22 +66,14 @@ class GroupFairnessBase(object):
         # Return exact and approximate fairness
         return exact, approx, diff
 
-    def _fairness_notion(self, history: History, calc_function, feature, sensitive_value, other_value, threshold):
+    def _fairness_notion(self, history: History, calc_function, sensitive_attribute, threshold):
         """Calculate the given fairness notion"""
         # TODO:
         import warnings
         warnings.filterwarnings("ignore")
 
-        states, actions, true_actions, _, _ = history.get_history()
         # Confusion matrices
-        cm_sensitive = self.CM.confusion_matrix(states, actions, true_actions, feature, sensitive_value)
-        if other_value is None:
-            value = sensitive_value
-            excluded = True
-        else:
-            value = other_value
-            excluded = False
-        cm_other = self.CM.confusion_matrix(states, actions, true_actions, feature, value, excluded=excluded)
+        cm_sensitive, cm_other = history.get_confusion_matrices(sensitive_attribute)
 
         # Calculate probabilities/ratios of the two groups
         prob_sensitive = calc_function(cm_sensitive)
@@ -91,7 +82,7 @@ class GroupFairnessBase(object):
         exact, approx, diff = self._is_fair(prob_sensitive, prob_other, threshold)
 
         # Set NaN values (missing groups so fairness cannot be calculated) to unfair
-        if len(states) < 2:
+        if (np.sum(cm_sensitive) < 1) and (np.sum(cm_other) < 1):
             diff = 1.0
         diff = np.nan_to_num(-diff)
 

@@ -1,3 +1,4 @@
+from collections import deque
 from enum import Enum
 from itertools import groupby
 from multiprocessing import Pool
@@ -9,6 +10,7 @@ from sklearn.utils import check_X_y
 
 from fairness.individual import IndividualNotion, IndividualFairnessBase
 from fairness.history import History
+from scenario import CombinedState
 
 
 def dict_to_array(d):
@@ -80,6 +82,8 @@ class IndividualFairness(IndividualFairnessBase):
 
         # Don't recalculate individuals who have been compared already, they haven't changed
         self._individual_comparisons = {}
+        self._individual_last_window = None
+        self._individual_total = 0.0
 
     def get_notion(self, notion: IndividualNotion, history: History, get_individual=lambda state: state, threshold=None,
                    similarity_metric=None, alpha=None, distance_metric=None):
@@ -107,41 +111,41 @@ class IndividualFairness(IndividualFairnessBase):
         # num_threads = max(os.cpu_count(), 32)
         num_threads = 4
 
-        map_i_j = []
-        previous_results = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                id_i, id_j = ids[i], ids[j]
-                comp_id = id_i+id_j
-                previous_comp = self._individual_comparisons.get(comp_id)
-                if previous_comp is None:
-                    map_i_j.append((i, j, states[i], states[j], scores[i], scores[j],
-                                    similarity_metric, alpha, distance_metric))
-                else:
-                    # print("Individuals\n\t", states[i], "\nand\n\t", states[j], "\nwere compared before (", comp_id, "), moving on...")
-                    previous_results.append(previous_comp)
-        # TODO: numba compiler
-        if False:#(map_i_j) > 500:
-            # TODO: this seems to be a bottleneck and works better single-threaded now that previous
-            #   comparisons are stored. Leaving it for frameworks with no window should it help speed up there
-            with Pool(processes=num_threads) as pool:
-                # map_i_j = [(i, j, states[i], states[j], scores[i], scores[j], similarity_metric, None)
-                #            for i in range(n) for j in range(i + 1, n)]
-                results = pool.map(_pool_individual_fairness, map_i_j)
-        else:
-            results = [_pool_individual_fairness(ij) for ij in map_i_j]
-        results.extend(previous_results)
+        with_window = history.window is not None
 
-        combos = len(results)
-        # print(results[:10])
-        # print(combos, "results, of which", len(previous_results), "were previously calculated")
-        total = []
-        new_individual_comparisons = {}
+        # Keep track of the differences to discard once the window passes
+        if with_window and self._individual_last_window is None:
+            self._individual_last_window = deque(maxlen=history.window)
+
+        # If given n interactions/individuals, under the assumption that all interactions until n have been compared in
+        #   the previous timestep, only individual n should be compared to 0 until n - 1
+        map_i_j = []
+        i = n - 1
+        for j in range(n - 1):
+            map_i_j.append((i, j, states[i], states[j], scores[i], scores[j],
+                            similarity_metric, alpha, distance_metric))
+        results = [_pool_individual_fairness(ij) for ij in map_i_j]
+        unsatisfied_pairs = 0
+
+        if with_window:
+            # Store data at individual with lowest index: comparison gets removed with individual when moving out
+            #   of the sliding window. Remove earliest individual from deque if outside window.
+            if len(self._individual_last_window) == history.window:
+                last = self._individual_last_window[0]
+                self._individual_total -= np.nansum(last)
+            self._individual_last_window.append([])
+
+        total = self._individual_total
+        total_comparisons = n * (n - 1) // 2
+
         for i, j, fair, diff, D, d in results:
-            id_i, id_j = ids[i], ids[j]
-            comp_id = id_i + id_j
-            new_individual_comparisons[comp_id] = (i, j, fair, diff, D, d)
-            total.append(diff)
+            if not np.isnan(diff):
+                total += diff
+            if with_window:
+                if j > 90:
+                    print(history.t, i, j, len(self._individual_last_window))
+                # j is a previously encountered individual, i is current
+                self._individual_last_window[j].append(diff)
 
             # Exact fair
             if fair:
@@ -149,31 +153,27 @@ class IndividualFairness(IndividualFairnessBase):
             exact = False
             # Not approx fair either
             if not threshold or diff < -threshold:
-                individual_i = (states[i], actions[i], true_actions[i], scores[i], rewards[i])
-                individual_j = (states[j], actions[j], true_actions[j], scores[j], rewards[j])
-                unsatisfied_pairs.append((individual_i, individual_j))
-                difference_per_pair.append(diff)
+                unsatisfied_pairs += 1
+                # individual_i = (states[i], actions[i], true_actions[i], scores[i], rewards[i])
+                # individual_j = (states[j], actions[j], true_actions[j], scores[j], rewards[j])
+                # unsatisfied_pairs.append((individual_i, individual_j))
+                # difference_per_pair.append(diff)
 
-        u = len(unsatisfied_pairs)
         if exact:
             approx = True
         else:
-            approx = u == 0
-        total = np.array(total)
-        diff = np.nansum(total) / max(1, len(total))
+            approx = unsatisfied_pairs == 0
+
+        diff = total / max(1, total_comparisons)
         diff = diff - 1.0  # Maximise diff (negative is unfair) & shift from [0, 1] to [-1, 0] like the group notions
-        # if len(total) > 0:
-        #     tot = np.array(total)
-        #     print(diff, tot.mean(), tot.min(), tot.max())
 
-        # print(u, "/", combos, "unsatisfied_pairs")
-        # print((exact, approx), diff, ([], unsatisfied_pairs, difference_per_pair))
-        self._individual_comparisons = new_individual_comparisons
+        self._individual_total = total
 
-        return (exact, approx), diff, ([], unsatisfied_pairs, difference_per_pair)
+        # removed unsatisfied_pairs and difference_per_pair for performance
+        return (exact, approx), diff, ([], [], [])
 
     def weakly_meritocratic(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=0,
-                            distance_metric="minkowski"):
+                            distance_metric="minkowski"):  # TODO: update with new history
         """Never prefer one action over another if the long-term (discounted) reward of
         choosing the latter action is higher
         """
@@ -242,7 +242,8 @@ class IndividualFairness(IndividualFairnessBase):
         #  OR threshold pairs max that don't satisfy?
 
         # print((exact, approx), diff, (unsatisfied, [], difference_per_ind))
-        return (exact, approx), diff, (unsatisfied, [], difference_per_ind)
+        # removed unsatisfied and difference_per_ind for performance
+        return (exact, approx), diff, ([], [], [])
 
     def consistency_score_complement(self, history: History, get_individual, threshold=None, similarity_metric=None,
                                      alpha=None, distance_metric="minkowski"):
@@ -255,7 +256,11 @@ class IndividualFairness(IndividualFairnessBase):
         """
         states, actions, _, _, _ = history.get_history()
         # individual_states = list(map(lambda state: state.to_array(individual_only=True), states))
-        individual_states = list(map(lambda state: get_individual(state, normalise=True), states))
+        if isinstance(states[0], CombinedState):
+            individual_states = list(map(lambda state: get_individual(state, normalise=True), states))
+        else:
+            individual_states = states
+
         n = len(actions)
 
         if n < 2:

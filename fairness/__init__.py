@@ -129,33 +129,33 @@ class ConfusionMatrix(object):
             cm /= num_samples
         return cm
 
-    @staticmethod
-    def ppv(cm):
-        """Positive Predictive Value (Precision)
-        PPV = TP / (TP + FP)"""
-        tn, fp, fn, tp = cm.ravel()
-        return tp / (tp + fp)
 
-    @staticmethod
-    def npv(cm):
-        """Negative Predictive Value.
-        NPV = TN / (TN + FN)"""
-        tn, fp, fn, tp = cm.ravel()
-        return tn / (tn + fn)
+def ppv(cm):
+    """Positive Predictive Value (Precision)
+    PPV = TP / (TP + FP)"""
+    tn, fp, fn, tp = cm.ravel()
+    return tp / (tp + fp)
 
-    @staticmethod
-    def tpr(cm):
-        """True Positive Rate (Sensitivity, Recall)
-         TPR = TP / (TP + FN)"""
-        tn, fp, fn, tp = cm.ravel()
-        return tp / (tp + fn)
 
-    @staticmethod
-    def fpr(cm):
-        """False Positive Rate (Model Error)
-         FPR = FP / (FP + TN)"""
-        tn, fp, fn, tp = cm.ravel()
-        return fp / (fp + tn)
+def npv(cm):
+    """Negative Predictive Value.
+    NPV = TN / (TN + FN)"""
+    tn, fp, fn, tp = cm.ravel()
+    return tn / (tn + fn)
+
+
+def tpr(cm):
+    """True Positive Rate (Sensitivity, Recall)
+     TPR = TP / (TP + FN)"""
+    tn, fp, fn, tp = cm.ravel()
+    return tp / (tp + fn)
+
+
+def fpr(cm):
+    """False Positive Rate (Model Error)
+     FPR = FP / (FP + TN)"""
+    tn, fp, fn, tp = cm.ravel()
+    return fp / (fp + tn)
 
 
 class SensitiveAttribute(object):
@@ -185,3 +185,12 @@ class SensitiveAttribute(object):
             values = self.sensitive_values
 
         return f"Feature<{self.feature.name} = {values}>"
+
+    def is_sensitive(self, value):
+        """Is the given feature value a sensitive one."""
+        if isinstance(self.sensitive_values, Iterable) and not isinstance(self.sensitive_values, str):
+            return value in self.sensitive_values
+        elif isinstance(self.sensitive_values, types.FunctionType):
+            return self.sensitive_values(value)
+        else:
+            return value == self.sensitive_values
