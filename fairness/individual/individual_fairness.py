@@ -142,8 +142,6 @@ class IndividualFairness(IndividualFairnessBase):
             if not np.isnan(diff):
                 total += diff
             if with_window:
-                if j > 90:
-                    print(history.t, i, j, len(self._individual_last_window))
                 # j is a previously encountered individual, i is current
                 self._individual_last_window[j].append(diff)
 
