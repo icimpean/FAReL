@@ -9,7 +9,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.utils import check_X_y
 
 from fairness.individual import IndividualNotion, IndividualFairnessBase
-from fairness.history import History
+from fairness.history import History, DiscountedHistory
 from scenario import CombinedState
 
 
@@ -105,6 +105,7 @@ class IndividualFairness(IndividualFairnessBase):
         states, actions, true_actions, scores, rewards = history.get_history()
         ids = history.ids
         n = len(states)
+        lowest_n = 0
         combos = 0
         exact = True
 
@@ -112,22 +113,28 @@ class IndividualFairness(IndividualFairnessBase):
         num_threads = 4
 
         with_window = history.window is not None
+        is_discounted = isinstance(history, DiscountedHistory)
 
         # Keep track of the differences to discard once the window passes
-        if with_window and self._individual_last_window is None:
+        if (with_window or is_discounted) and self._individual_last_window is None:
             self._individual_last_window = deque(maxlen=history.window)
+
+        # Can only compare as many individuals as present in self._individual_last_window + 1,
+        #   others are dropped due to threshold
+        if is_discounted:
+            lowest_n = n - (len(self._individual_last_window) + 1)
 
         # If given n interactions/individuals, under the assumption that all interactions until n have been compared in
         #   the previous timestep, only individual n should be compared to 0 until n - 1
         map_i_j = []
         i = n - 1
-        for j in range(n - 1):
+        for j in range((n - 1) - 1, lowest_n - 1, -1):  # Run range(lowest_n, n - 1) backwards for is_discounted
             map_i_j.append((i, j, states[i], states[j], scores[i], scores[j],
                             similarity_metric, alpha, distance_metric))
         results = [_pool_individual_fairness(ij) for ij in map_i_j]
         unsatisfied_pairs = 0
 
-        if with_window:
+        if with_window or is_discounted:
             # Store data at individual with lowest index: comparison gets removed with individual when moving out
             #   of the sliding window. Remove earliest individual from deque if outside window.
             if len(self._individual_last_window) == history.window:
@@ -135,27 +142,74 @@ class IndividualFairness(IndividualFairnessBase):
                 self._individual_total -= np.nansum(last)
             self._individual_last_window.append([])
 
-        total = self._individual_total
-        total_comparisons = n * (n - 1) // 2
+        # Windowed + full history
+        if not is_discounted:
+            total = self._individual_total
+            total_comparisons = n * (n - 1) // 2
 
-        for i, j, fair, diff, D, d in results:
-            if not np.isnan(diff):
-                total += diff
-            if with_window:
+            for i, j, fair, diff, D, d in results:
+                if not np.isnan(diff):
+                    total += diff
+                if with_window:
+                    # j is a previously encountered individual, i is current
+                    self._individual_last_window[j].append(diff)
+
+                # Exact fair
+                if fair:
+                    continue
+                exact = False
+                # Not approx fair either
+                if not threshold or diff < -threshold:
+                    unsatisfied_pairs += 1
+        # Discounted
+        else:
+            # n is shifted based on if _individual_last_window has been reduced in previous iterations
+            shifted_n = n - len(self._individual_last_window)
+
+            for i, j, fair, diff, D, d in results:
                 # j is a previously encountered individual, i is current
-                self._individual_last_window[j].append(diff)
+                shifted_j = j - shifted_n
+                self._individual_last_window[shifted_j].append(diff)
+                # Exact fair
+                if fair:
+                    continue
+                exact = False
+                # Not approx fair either
+                if not threshold or diff < -threshold:
+                    unsatisfied_pairs += 1
 
-            # Exact fair
-            if fair:
-                continue
-            exact = False
-            # Not approx fair either
-            if not threshold or diff < -threshold:
-                unsatisfied_pairs += 1
-                # individual_i = (states[i], actions[i], true_actions[i], scores[i], rewards[i])
-                # individual_j = (states[j], actions[j], true_actions[j], scores[j], rewards[j])
-                # unsatisfied_pairs.append((individual_i, individual_j))
-                # difference_per_pair.append(diff)
+            # Start from newest timestep and go backwards
+            m = len(self._individual_last_window)
+            total = 0
+            total_comparisons = 0
+            t = 0
+            remove = 0
+            for j in range(m - 1 - 1, -1, -1):
+                diffs_j = self._individual_last_window[j]
+                new_total = total + np.nansum(diffs_j) * (history.discount_factor ** t)
+                new_total_comparisons = total_comparisons + len(diffs_j) * (history.discount_factor ** t)
+                t += 1
+
+                # Check if difference is large enough
+                # noinspection PyUnresolvedReferences
+                if abs(total / max(1, total_comparisons) - new_total / new_total_comparisons) < history.discount_threshold:
+                    remove += 1
+                    # Wait for comparisons of at least 5 consecutive individuals in the history
+                    # to not pass the threshold
+                    if remove >= 5:
+                        # Remove all individuals before the given range
+                        print("discarding", j-1, "/", m)
+
+                        for k in range(j - 1):
+                            self._individual_last_window.popleft()
+                            # TODO: How/When to remove corresponding interactions in history? (Check usage of other notions)
+                        # Stop considering older encounters of individuals
+                        break
+
+                total = new_total
+                total_comparisons = new_total_comparisons
+            # total_comparisons = t * (t - 1) // 2
+            # print("ind_fairness", t, total_comparisons)
 
         if exact:
             approx = True

@@ -3,7 +3,7 @@ from typing import Union, List
 from fairness import SensitiveAttribute
 from fairness.group import GroupNotion, ALL_GROUP_NOTIONS
 from fairness.group.group_fairness import GroupFairness
-from fairness.history import History
+from fairness.history import History, SlidingWindowHistory, DiscountedHistory
 from fairness.individual import ALL_INDIVIDUAL_NOTIONS, IndividualNotion
 from fairness.individual.individual_fairness import IndividualFairness
 from scenario import CombinedState
@@ -28,14 +28,24 @@ class FairnessFramework(object):
                  distance_metric="minkowski", alpha=None,
                  group_notions=None, individual_notions=None, window=None,
                  store_interactions=True, has_individual_fairness=True,
+                 discount_factor=None, discount_threshold=None,
                  visualise=False, visualise_cm=False, visualise_notions=False,
                  visualise_reward=False, visualise_hist=False):
         self.actions = actions
         self.window = window
         self.store_interactions = store_interactions
         self.has_individual_fairness = has_individual_fairness
-        self.history = History(actions, self.window, store_interactions=self.store_interactions,
-                               has_individual_fairness=self.has_individual_fairness)
+        self.discount_factor = discount_factor
+        self.discount_threshold = discount_threshold
+        # Use a discounted history
+        if discount_factor is not None:
+            self.history = DiscountedHistory(actions, self.discount_factor, self.discount_threshold,
+                                             store_interactions=self.store_interactions,
+                                             has_individual_fairness=self.has_individual_fairness)
+        # Use a sliding window history
+        else:
+            self.history = SlidingWindowHistory(actions, self.window, store_interactions=self.store_interactions,
+                                                has_individual_fairness=self.has_individual_fairness)
         self.visualise = visualise
         self.visualise_cm = visualise_cm
         self.visualise_notions = visualise_notions

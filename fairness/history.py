@@ -25,8 +25,50 @@ class History(object):
         self.has_individual_fairness = has_individual_fairness
         self.store_state_array = store_state_array
         self.CM = ConfusionMatrix(self.env_actions)
-        self.confusion_matrices = {}
         self.t = 0
+
+    def update(self, episode, t, state, action, true_action, score, reward,
+               sensitive_attributes: List[SensitiveAttribute]):
+        """Update the history with a newly observed tuple
+
+        Args:
+            episode: The episode where the interaction took place
+            t: The timestep of the interaction
+            state: The observed state
+            action: The action taken in that state
+            true_action: The correct action according to the ground truth of the problem
+            score: The score assigned by the agent for the given state, or state-action pair
+            reward: The reward received for the given action.
+            sensitive_attributes: The sensitive attributes for which to store computations.
+        """
+        raise NotImplementedError
+
+    def get_history(self):
+        """Get history"""
+        raise NotImplementedError
+
+    def get_confusion_matrices(self, sensitive_attribute: SensitiveAttribute):
+        """Get the confusion matrices for the given sensitive attribute"""
+        raise NotImplementedError
+
+
+class SlidingWindowHistory(History):
+    """A history of encountered states and actions
+
+    Attributes:
+        env_actions: The actions taken in environment.
+        window: (Optional) Use a sliding window for the stored history.
+        store_interactions: (Optional) Store the full interactions instead of only the required information for
+            fairness notions. Default: True.
+        has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
+    """
+    def __init__(self, env_actions, window=None, store_interactions=True, has_individual_fairness=True,
+                 store_state_array=lambda state: state):
+        # Super call
+        super(SlidingWindowHistory, self).__init__(env_actions, window, store_interactions, has_individual_fairness,
+                                                   store_state_array)
+        #
+        self.confusion_matrices = {}
         #
         if self.store_interactions or self.has_individual_fairness:
             self.states = deque(maxlen=self.window)
@@ -152,3 +194,26 @@ class History(object):
             cm_other = np.array(cm_other).reshape((2, 2))
 
         return cm_sensitive, cm_other
+
+
+class DiscountedHistory(SlidingWindowHistory):
+    """A discounted history of encountered states and actions
+    
+    Attributes:
+        env_actions: The actions taken in environment.
+        discount_factor: (Optional) The discount factor to use for the history. Default: 1.0.
+        discount_threshold: (Optional) The threshold to surpass to keep older interactions in the history.
+        store_interactions: (Optional) Store the full interactions instead of only the required information for
+            fairness notions. Default: True.
+        has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
+    """
+    def __init__(self, env_actions, discount_factor=1.0, discount_threshold=1e-5,
+                 store_interactions=True, has_individual_fairness=True,
+                 store_state_array=lambda state: state):
+        window = None
+        # Super Call
+        super(DiscountedHistory, self).__init__(env_actions, window,
+                                                store_interactions, has_individual_fairness, store_state_array)
+        #
+        self.discount_factor = discount_factor
+        self.discount_threshold = discount_threshold

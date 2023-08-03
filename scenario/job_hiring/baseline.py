@@ -4,23 +4,19 @@ import numpy as np
 import pandas as pd
 import torch
 
-from agent.dqn import DQNAgent, EpsilonGreedyPolicy, DecayingEpsilonGreedyPolicy
+from agent.dqn import DQNAgent
 from agent.dqn.policy import BoltzmannPolicy
 from fairness import SensitiveAttribute
 from fairness.fairness_framework import FairnessFramework
 from fairness.group import GroupNotion, ALL_GROUP_NOTIONS
 from fairness.individual import IndividualNotion
-from run_scenario import run_scenario
-from scenario import FeatureBias
 from scenario.job_hiring import run_scenario_dash
-from scenario.job_hiring.features import HiringFeature, Gender, EMPLOYMENT_TRANSITIONS, EMPLOYMENT_DURATIONS
+from scenario.job_hiring.features import HiringFeature, Gender, EMPLOYMENT_TRANSITIONS
 from scenario.job_hiring.env import JobHiringEnv
 import dash
 from dash import dcc, html
 import plotly.graph_objects as go
 import plotly.express as px
-
-from scenario.job_hiring.visualuse_pareto import plot_radar_pf
 
 if __name__ == '__main__':
     seed = 1

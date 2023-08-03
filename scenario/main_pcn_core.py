@@ -515,6 +515,10 @@ if __name__ == '__main__':
                         help='proportion of fraudulent transactions to genuine. 0 defaults to default MultiMAuS parameters')
     # Fairness framework
     parser.add_argument('--window', default=100, type=int, help='fairness framework window')
+    parser.add_argument('--discount_history', default=0, type=int,
+                        help='use a discounted history or sliding window implementation')
+    parser.add_argument('--discount_factor', default=1.0, type=float, help='fairness framework discount factor for history')
+    parser.add_argument('--discount_threshold', default=1e-5, type=float, help='fairness framework discount threshold for history')
     parser.add_argument('--fair_alpha', default=0.1, type=float, help='fairness framework alpha for similarity metric')
     parser.add_argument('--wandb', default=1, type=int, help="(Ignored, overrides to 0) use wandb for loggers or save local only")
     parser.add_argument('--no_window', default=0, type=int, help="Use the full history instead of a window")
@@ -542,11 +546,14 @@ if __name__ == '__main__':
     # #
     #
     # # args.single_objective = 0
-    # # args.env = "fraud"
+    # args.env = "fraud"
     # args.seed = 1
     # no_save = True  # TODO
     # args.fraud_proportion = 0#.20
-    # args.log_dir = "./experiment/seed_44/window_2"
+    # args.log_dir = "./experiment/discount"
+    # args.discount_history = 1
+    # args.discount_factor = 1.0
+    # args.discount_threshold = 1e-6
 
     print(args)
 
@@ -648,6 +655,9 @@ if __name__ == '__main__':
     if args.no_individual:
         all_individual_notions = []
 
+    use_discount_history = args.discount_history != 0
+    discount_factor = args.discount_factor if use_discount_history else None
+    discount_threshold = args.discount_threshold if use_discount_history else None
     fairness_framework = FairnessFramework([a for a in HiringActions], sensitive_attribute,
                                            individual_notions=all_individual_notions,
                                            group_notions=all_group_notions,
@@ -657,6 +667,8 @@ if __name__ == '__main__':
                                            distance_metric="braycurtis",  # in [0, 1]
                                            alpha=args.fair_alpha,
                                            window=args.window,
+                                           discount_factor=discount_factor,
+                                           discount_threshold=discount_threshold,
                                            store_interactions=False, has_individual_fairness=not args.no_individual)
 
     _num_notions = len(all_group_notions) + len(all_individual_notions)
