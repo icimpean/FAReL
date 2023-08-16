@@ -553,7 +553,7 @@ if __name__ == '__main__':
     # args.log_dir = "./experiment/discount"
     # args.discount_history = 1
     # args.discount_factor = 1.0
-    # args.discount_threshold = 1e-6
+    # args.discount_threshold = 1e-4
 
     print(args)
 
@@ -579,8 +579,6 @@ if __name__ == '__main__':
         if args.no_individual:
             args.objectives = [0, 1, 2] if is_job_hiring else [0, 3, 4]
     if args.single_objective != -1:
-        if args.no_individual:
-            assert args.single_objective < 5, "No individual fairness supported with given arguments"
         args.objectives = [args.single_objective]
         print("Single objective:", args.objectives)
 
@@ -645,6 +643,9 @@ if __name__ == '__main__':
     # logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S_') + str(uuid.uuid4())[:4] + '/'
     logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S/')
     os.makedirs(logdir, exist_ok=True)
+
+    with open(f"{logdir}/args.txt", mode="w") as file:
+        file.write(str(args))
 
     #
     main_obj = [0]
