@@ -1,4 +1,5 @@
 from copy import copy
+from typing import Union
 
 from scenario.job_hiring.features import *
 from scenario import Scenario, CombinedState
@@ -62,6 +63,7 @@ class JobHiringEnv(Scenario):
                  goodness_noise=GOODNESS_NOISE, noise_hire=NOISE_HIRE,
                  goodness_biases=None, reward_biases=None):
         # Super call
+        self._features = None
         features = [feature for feature in HiringFeature]
         nominal_features = [HiringFeature.gender, HiringFeature.married,
                             HiringFeature.nationality, *LANGUAGE_FEATURES]
@@ -379,9 +381,17 @@ class JobHiringEnv(Scenario):
         rewards = {HiringActions.reject: reward_reject, HiringActions.hire: reward_hire}
         return rewards
 
-    def _normalise_features(self, state: CombinedState, features: List[HiringFeature] = None):
-        new_values = self.applicant_generator.normalise_features(state.sample_dict, features)
-        new_values = np.array([new_values[f] for f in new_values])
+    def _normalise_features(self, state: Union[CombinedState, np.ndarray], features: List[HiringFeature] = None,
+                            indices=None):
+        if isinstance(state, CombinedState):
+            new_values = self.applicant_generator.normalise_features(state.sample_dict, features)
+            new_values = np.array([new_values[f] for f in new_values])
+        else:
+            # Already transformed into array, return requested features
+            if indices:
+                new_values = state[indices]
+            else:
+                new_values = np.array([state[i] for i, f in enumerate([g for g in self._features if g not in CompanyFeature]) if f in features])
         return new_values
 
     def normalise_state(self, state: CombinedState):
@@ -389,6 +399,12 @@ class JobHiringEnv(Scenario):
         norm_array = np.array([self.applicant_generator.normalise_feature(feature, value)
                                if feature not in self.company_features else value
                                for feature, value in zip(features, values)])
+        if self._nom_indices is None:
+            self._features = features
+            self._nom_indices = [i for i, f in enumerate([g for g in self._features if g not in CompanyFeature]) if
+                                 f in self.nominal_features]
+            self._num_indices = [i for i, f in enumerate([g for g in self._features if g not in CompanyFeature]) if
+                                 f in self.numerical_features]
         return norm_array
 
     def get_individual(self, state: CombinedState, normalise=True):

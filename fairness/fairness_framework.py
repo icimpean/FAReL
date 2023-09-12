@@ -25,7 +25,7 @@ class FairnessFramework(object):
     """
     def __init__(self, actions, sensitive_attributes: Union[SensitiveAttribute, List[SensitiveAttribute]],
                  threshold=None, get_individual=lambda state: state, similarity_metric=None,
-                 distance_metric="minkowski", alpha=None,
+                 distance_metrics=[], alpha=None,
                  group_notions=None, individual_notions=None, window=None,
                  store_interactions=True, has_individual_fairness=True,
                  discount_factor=None, discount_threshold=None,
@@ -56,7 +56,6 @@ class FairnessFramework(object):
             if isinstance(sensitive_attributes, SensitiveAttribute) else sensitive_attributes
         #
         self.get_individual = get_individual
-        self.distance_metric = distance_metric
         self.similarity_metric = similarity_metric
         self.alpha = alpha
         #
@@ -66,9 +65,14 @@ class FairnessFramework(object):
         self.group_fairness = GroupFairness(actions)
         #
         self.individual_notions = individual_notions if individual_notions is not None else ALL_INDIVIDUAL_NOTIONS
+        self.distance_metrics = distance_metrics if individual_notions is not None else ["braycurtis"] * len(ALL_INDIVIDUAL_NOTIONS)
         if not self.has_individual_fairness:
             self.individual_notions = []
-        self.individual_fairness = IndividualFairness(actions)
+        ind_metrics = [d for n, d in zip(self.individual_notions, self.distance_metrics)
+                       if n is IndividualNotion.IndividualFairness]
+        csc_metrics = [d for n, d in zip(self.individual_notions, self.distance_metrics)
+                       if n is IndividualNotion.ConsistencyScoreComplement]
+        self.individual_fairness = IndividualFairness(actions, ind_metrics, csc_metrics)
 
         self.all_notions = self.group_notions + self.individual_notions
 
@@ -91,7 +95,7 @@ class FairnessFramework(object):
         return self.group_fairness.get_notion(group_notion, self.history, sensitive_attribute, threshold)
 
     def get_individual_notion(self, individual_notion: IndividualNotion, get_individual=lambda state: state,
-                              threshold=None, similarity_metric=None, alpha=None, distance_metric="minkowski"):
+                              threshold=None, similarity_metric=None, alpha=None, distance_metric=("braycurtis", "braycurtis")):
         """Get the given individual notion"""
         return self.individual_fairness.get_notion(individual_notion, self.history, get_individual, threshold,
                                                    similarity_metric, alpha, distance_metric)
@@ -148,15 +152,20 @@ class ExtendedfMDP(object):
                                                              self.fairness_framework.threshold)
                 reward.append(diff)
         # Individual notions:
-        for notion in self.fairness_framework.individual_notions:
+        for notion, distance_metric in zip(self.fairness_framework.individual_notions,
+                                           self.fairness_framework.distance_metrics):
+            if distance_metric.startswith("H") and distance_metric.endswith("OM"):
+                metric = lambda state1, state2: self.env.H_OM_distance(state1, state2, distance_metric,
+                                                                       self.fairness_framework.alpha, exp=True)
+            else:
+                metric = distance_metric
             (exact, approx), diff, (u_ind, u_pairs, U_diff) = \
                 self.fairness_framework.get_individual_notion(notion, self.fairness_framework.get_individual,
                                                               self.fairness_framework.threshold,
                                                               self.fairness_framework.similarity_metric,
                                                               self.fairness_framework.alpha,
-                                                              self.fairness_framework.distance_metric)
+                                                              (distance_metric, metric))
             reward.append(diff)
-
         self._t += 1
 
         return next_state, reward, done, info

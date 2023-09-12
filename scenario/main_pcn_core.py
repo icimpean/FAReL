@@ -12,13 +12,14 @@ import argparse
 from pytz import timezone
 
 import sys
+
 sys.path.append("./")  # for command-line execution to find the other packages (e.g. envs)
 
 from agent.pcn.pcn_core import epsilon_metric, non_dominated, compute_hypervolume, add_episode, \
     choose_commands, Transition
 
 from agent.pcn.logger import Logger
-from fairness import SensitiveAttribute
+from fairness import SensitiveAttribute, CombinedSensitiveAttribute
 from fairness.fairness_framework import FairnessFramework, ExtendedfMDP
 from fairness.group import GroupNotion
 from fairness.individual import IndividualNotion
@@ -26,7 +27,7 @@ from loggers.logger import AgentLogger, LeavesLogger, TrainingPCNLogger, EvalLog
 from scenario.fraud_detection.MultiMAuS.simulator import parameters
 from scenario.fraud_detection.MultiMAuS.simulator.transaction_model import TransactionModel
 from scenario.fraud_detection.env import NUM_FRAUD_FEATURES, TransactionModelMDP, FraudFeature
-from scenario.job_hiring.features import HiringFeature, Gender, ApplicantGenerator
+from scenario.job_hiring.features import HiringFeature, Gender, ApplicantGenerator, Nationality
 from scenario.job_hiring.env import HiringActions, JobHiringEnv, NUM_JOB_HIRING_FEATURES
 
 ss_emb = {
@@ -175,8 +176,9 @@ def run_episode_fairness(env, model, desired_return, desired_horizon, max_return
         #
         next_t = time.time()
         if not eval_axes:
-            log_entries.append(agent_logger.create_entry(current_ep, t, obs, action, reward, done, info, next_t - curr_t,
-                                                         status))
+            log_entries.append(
+                agent_logger.create_entry(current_ep, t, obs, action, reward, done, info, next_t - curr_t,
+                                          status))
         curr_t = next_t
         t += 1
     agent_logger.write_data(log_entries, path)
@@ -320,6 +322,7 @@ def train_fair(env,
     pcn_logger = TrainingPCNLogger(objectives=all_obj)
     eval_logger = EvalLogger(objectives=all_obj)
 
+    # TODO: replace by list of timesteps and actions to recreate interactions?
     # agent_logger.create_file(agent_logger.path_eval_axes)
     agent_logger.create_file(agent_logger.path_eval)
     agent_logger.create_file(agent_logger.path_train)
@@ -377,8 +380,6 @@ def train_fair(env,
         entropy = []
         for moupd in range(n_model_updates):
             l, lp = update_model_hire(model, opt, experience_replay, batch_size=batch_size)
-            # loss.append(l.detach().cpu().numpy())
-            # lp = lp.detach().cpu().numpy()
             loss.append(l)
             lp = lp
             ent = np.sum(-np.exp(lp) * lp)
@@ -388,8 +389,15 @@ def train_fair(env,
         desired_return, desired_horizon = choose_commands(experience_replay, n_er_episodes, objectives)
 
         # get all leaves, contain biggest elements, experience_replay got heapified in choose_commands
-        leaves = np.array([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
-        e_lengths, e_returns = zip(*leaves)
+        # print([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
+        # leaves = np.array([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
+        # e_lengths, e_returns = zip(*leaves)
+        # print([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
+        # leaves = np.array([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
+        e_lengths, e_returns = [(len(e[2])) for e in experience_replay[len(experience_replay) // 2:]], [(e[2][0].reward)
+                                                                                                        for e in
+                                                                                                        experience_replay[
+                                                                                                        len(experience_replay) // 2:]]
         e_lengths, e_returns = np.array(e_lengths), np.array(e_returns)
         try:
             if len(experience_replay) == max_size:
@@ -430,10 +438,11 @@ def train_fair(env,
         nd_coverage_set, e_i = non_dominated(e_returns[:, objectives], return_indexes=True)
 
         entry = pcn_logger.create_entry(ep, step, np.mean(loss), np.mean(entropy), desired_horizon,
-                                np.linalg.norm(np.mean(horizons) - desired_horizon), np.mean(horizons), hv,
-                                e_returns, nd_coverage_set,
-                                np.mean(np.array(returns), axis=0), desired_return,
-                                [np.linalg.norm(np.mean(np.array(returns)[:, o]) - desired_return[o]) for o in range(len(desired_return))])
+                                        np.linalg.norm(np.mean(horizons) - desired_horizon), np.mean(horizons), hv,
+                                        e_returns, nd_coverage_set,
+                                        np.mean(np.array(returns), axis=0), desired_return,
+                                        [np.linalg.norm(np.mean(np.array(returns)[:, o]) - desired_return[o]) for o in
+                                         range(len(desired_return))])
         pcn_logger.write_data(entry)
 
         if step >= (n_checkpoints + 1) * total_steps / 10:
@@ -472,15 +481,15 @@ if __name__ == '__main__':
     # print(torch.cuda.is_available())
     # import objgraph
     import time
+
     t_start = time.time()
 
     parser = argparse.ArgumentParser(description='PCN')
-    parser.add_argument('--objectives', default=[0, 1, 6], type=int, nargs='+',
+    parser.add_argument('--objectives', default=[0, 1], type=int, nargs='+',
                         help='index for reward (0), StatisticalParity (1), EqualOpportunity (2), '
-                             'OverallAccuracyEquality (3), PredictiveParity (4), IndividualFairness (5), '
-                             'ConsistencyScoreComplement (6)')
-    parser.add_argument('--default_objectives', default=0, type=int, help="Use [0, 1, 2, 5] for job hiring, "
-                                                                          "[0, 3, 4, 6] for fraud detection")
+                             'OverallAccuracyEquality (3), PredictiveParity (4), '
+                             'IndividualFairness (5), ConsistencyScoreComplement (6),'
+                             'WeaklyMeritocratic (7), Gini (8), Entropy (9)')  # TODO connect/implement 7+
     parser.add_argument('--single_objective', default=-1, type=int, help="Use a single objective to train on")
     parser.add_argument('--env', default='job', type=str, help='job or fraud')
     # parser.add_argument('--action', default='discrete', type=str, help='discrete, multidiscrete or continuous')
@@ -502,6 +511,7 @@ if __name__ == '__main__':
     #
     parser.add_argument('--seed', default=0, type=int, help='seed for rng')
     parser.add_argument('--vsc', default=0, type=int, help='running on local (0) or VSC cluster (1)')
+
     # Job hiring parameters
     parser.add_argument('--team_size', default=20, type=int, help='maximum team size to reach')
     parser.add_argument('--episode_length', default=100, type=int, help='maximum episode length')
@@ -517,43 +527,57 @@ if __name__ == '__main__':
     parser.add_argument('--window', default=100, type=int, help='fairness framework window')
     parser.add_argument('--discount_history', default=0, type=int,
                         help='use a discounted history or sliding window implementation')
-    parser.add_argument('--discount_factor', default=1.0, type=float, help='fairness framework discount factor for history')
-    parser.add_argument('--discount_threshold', default=1e-5, type=float, help='fairness framework discount threshold for history')
+    parser.add_argument('--discount_factor', default=1.0, type=float,
+                        help='fairness framework discount factor for history')
+    parser.add_argument('--discount_threshold', default=1e-5, type=float,
+                        help='fairness framework discount threshold for history')
     parser.add_argument('--fair_alpha', default=0.1, type=float, help='fairness framework alpha for similarity metric')
-    parser.add_argument('--wandb', default=1, type=int, help="(Ignored, overrides to 0) use wandb for loggers or save local only")
+    parser.add_argument('--wandb', default=1, type=int,
+                        help="(Ignored, overrides to 0) use wandb for loggers or save local only")
     parser.add_argument('--no_window', default=0, type=int, help="Use the full history instead of a window")
     parser.add_argument('--no_individual', default=0, type=int, help="No individual fairness notions")
+    parser.add_argument('--distance_metrics', default=[], type=str, nargs='+',
+                        help='The distance metric to use for every individual fairness notion specified')
+    #
+    parser.add_argument('--combined_sensitive_attributes', default=0, type=int,
+                        help='Use a combination of sensitive attributes to compute fairness notions')
     #
     parser.add_argument('--log_dir', default='new_experiment', type=str, help="Directory where to store results")
-
 
     args = parser.parse_args()
     no_save = False
     args.wandb = 0
 
-    # args.top_episodes = 20  # TODO
-    # args.n_episodes = 15
-    # args.er_size = 50
+    # args.top_episodes = 5  # TODO
+    # args.n_episodes = 5
+    # args.er_size = 20
     # args.model_updates = 10
     # args.steps = 10000
-    # args.team_size = 100
-    # args.episode_length = args.team_size * 10
+    # # args.team_size = 100
+    # # args.episode_length = args.team_size * 10
     # args.window = 100
-    # args.window = None
-    # args.no_individual = 1
-    # args.default_objectives = 1
-    # args.no_window = 1
+    # # args.window = None
+    # # args.no_individual = 1
+    # # args.default_objectives = 1
+    # # args.no_window = 0
+    # # #
     # #
+    # # # args.single_objective = 0
+    # # args.env = "fraud"
+    # # args.seed = 1
+    # # no_save = True  # TODO
+    # # args.fraud_proportion = 0#.20
+    # args.log_dir = "./experiment/individual_fair/"
+    # # args.vsc = 2
+    # # args.discount_history = 1
+    # # args.discount_factor = 1.0
+    # # args.discount_threshold = 1e-4
+    # args.combined_sensitive_attributes = 2
     #
-    # # args.single_objective = 0
-    # args.env = "fraud"
-    # args.seed = 1
-    # no_save = True  # TODO
-    # args.fraud_proportion = 0#.20
-    # args.log_dir = "./experiment/discount"
-    # args.discount_history = 1
-    # args.discount_factor = 1.0
-    # args.discount_threshold = 1e-6
+    # args.objectives = [0, 1, 5, 6, 5, 6, 5, 6]
+    # args.distance_metrics = ["braycurtis", "braycurtis", "HMOM", "HMOM", "HEOM", "HEOM"]
+    # # args.objectives = [0, 1, 5, 5, 5]
+    # # args.distance_metrics = ["braycurtis", "HMOM", "HEOM"]
 
     print(args)
 
@@ -573,14 +597,7 @@ if __name__ == '__main__':
     if args.no_window:
         args.window = None
 
-    if args.default_objectives:
-        print("Default env objective:", args.objectives)
-        args.objectives = [0, 1, 2, 5] if is_job_hiring else [0, 3, 4, 6]
-        if args.no_individual:
-            args.objectives = [0, 1, 2] if is_job_hiring else [0, 3, 4]
     if args.single_objective != -1:
-        if args.no_individual:
-            assert args.single_objective < 5, "No individual fairness supported with given arguments"
         args.objectives = [args.single_objective]
         print("Single objective:", args.objectives)
 
@@ -603,8 +620,18 @@ if __name__ == '__main__':
         env = JobHiringEnv(team_size=team_size, seed=seed, episode_length=episode_length,  # Required ep length for pcn
                            diversity_weight=diversity_weight, applicant_generator=applicant_generator)
 
-        sensitive_attribute = SensitiveAttribute(HiringFeature.gender, sensitive_values=Gender.female,
-                                                 other_values=Gender.male)  # TODO: abstract parameters
+        if args.combined_sensitive_attributes == 1:
+            sensitive_attribute = CombinedSensitiveAttribute([HiringFeature.gender, HiringFeature.nationality],
+                                                             sensitive_values=[Gender.female, Nationality.foreign],
+                                                             other_values=[Gender.male, Nationality.belgian])
+        elif args.combined_sensitive_attributes == 2:
+            sensitive_attribute = [SensitiveAttribute(HiringFeature.gender, sensitive_values=Gender.female,
+                                                      other_values=Gender.male),
+                                   SensitiveAttribute(HiringFeature.nationality, sensitive_values=Nationality.foreign,
+                                                      other_values=Nationality.belgian)]
+        else:
+            sensitive_attribute = SensitiveAttribute(HiringFeature.gender, sensitive_values=Gender.female,
+                                                     other_values=Gender.male)  # TODO: abstract parameters
 
     # Fraud
     else:
@@ -637,12 +664,20 @@ if __name__ == '__main__':
         # Continents mapping from default parameters: {'EU': 0, 'AS': 1, 'NA': 2, 'AF': 3, 'OC': 4, 'SA': 5}
         # sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=1, other_values=0)
         # NA vs EU instead of AS vs EU to increase population size in both
-        sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=2, other_values=0)
+        if args.combined_sensitive_attributes == 1:
+            sensitive_attribute = CombinedSensitiveAttribute([FraudFeature.continent, FraudFeature.merchant_id],
+                                                             sensitive_values=[2, 6],
+                                                             other_values=[0, None])
+        elif args.combined_sensitive_attributes == 2:
+            sensitive_attribute = [SensitiveAttribute(FraudFeature.continent, sensitive_values=2,
+                                                      other_values=0),
+                                   SensitiveAttribute(FraudFeature.merchant_id, sensitive_values=6,
+                                                      other_values=None)]
+        else:
+            sensitive_attribute = SensitiveAttribute(FraudFeature.continent, sensitive_values=2, other_values=0)
 
     #
-    # logdir += '/'.join([f'{k}_{v}' for k, v in vars(args).items()]) + '/'
     logdir += args.log_dir + "/"
-    # logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S_') + str(uuid.uuid4())[:4] + '/'
     logdir += datetime.now().strftime('%Y-%m-%d_%H-%M-%S/')
     os.makedirs(logdir, exist_ok=True)
 
@@ -651,7 +686,14 @@ if __name__ == '__main__':
 
     all_group_notions = [GroupNotion.StatisticalParity, GroupNotion.EqualOpportunity,
                          GroupNotion.OverallAccuracyEquality, GroupNotion.PredictiveParity]
-    all_individual_notions = [IndividualNotion.IndividualFairness, IndividualNotion.ConsistencyScoreComplement]
+
+    _ind_notions_mapping = {
+        5: IndividualNotion.IndividualFairness,
+        # 6: IndividualNotion.ConsistencyScoreComplement,  # TODO: replace/remove
+        6: IndividualNotion.ConsistencyScoreComplementOnline,
+    }
+
+    all_individual_notions = [_ind_notions_mapping[o] for o in args.objectives if o >= 5]
     if args.no_individual:
         all_individual_notions = []
 
@@ -663,15 +705,17 @@ if __name__ == '__main__':
                                            group_notions=all_group_notions,
                                            get_individual=env.get_individual,
                                            similarity_metric=env.similarity_metric,
-                                           # distance_metric="minkowski",
-                                           distance_metric="braycurtis",  # in [0, 1]
+                                           distance_metrics=args.distance_metrics,
                                            alpha=args.fair_alpha,
                                            window=args.window,
                                            discount_factor=discount_factor,
                                            discount_threshold=discount_threshold,
                                            store_interactions=False, has_individual_fairness=not args.no_individual)
 
-    _num_notions = len(all_group_notions) + len(all_individual_notions)
+    # TODO:  #notions = #group notions + #individual notions with specific similarity distance
+    # TODO: max reward still ok with new metrics/group divisions
+    _num_group_notions = (len(sensitive_attribute) if args.combined_sensitive_attributes >= 2 else 1) * len(all_group_notions)
+    _num_notions = _num_group_notions + len(all_individual_notions)
     max_reward = episode_length * 1
     scale = np.array([1] + [1] * _num_notions)
     ref_point = np.array([-max_reward] + [-episode_length] * _num_notions)

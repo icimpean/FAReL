@@ -194,3 +194,39 @@ class SensitiveAttribute(object):
             return self.sensitive_values(value)
         else:
             return value == self.sensitive_values
+
+
+class CombinedSensitiveAttribute(SensitiveAttribute):
+    """The class defining a combination of multiple sensitive attributes, for minorities or subgroup fairness"""
+    def __init__(self, features, sensitive_values, other_values=None):
+        # Super call
+        super(CombinedSensitiveAttribute, self).__init__(features, sensitive_values, other_values)
+
+    def __str__(self):
+        string = ""
+        for feature, sensitive_values, other_values in zip(self.feature, self.sensitive_values, self.other_values):
+            # other = "" if self.other_values is None else f" =/= {self.other_values}"
+            if isinstance(sensitive_values, Enum):
+                values = sensitive_values.name
+            elif isinstance(sensitive_values, Iterable) and not isinstance(sensitive_values, str):
+                values = ", ".join([v.name if isinstance(v, Enum) else v for v in sensitive_values])
+            elif isinstance(sensitive_values, types.FunctionType):
+                values = sensitive_values.__name__
+            else:
+                values = sensitive_values
+            string += "~AND~" + f"Feature<{feature.name} = {values}>"
+
+        return string
+
+    def is_sensitive(self, values):
+        """Is the given feature value a sensitive one."""
+        sensitive = []
+        for value, sensitive_values in zip(values, self.sensitive_values):
+            if isinstance(sensitive_values, Iterable) and not isinstance(sensitive_values, str):
+                sensitive.append(value in sensitive_values)
+            elif isinstance(sensitive_values, types.FunctionType):
+                sensitive.append(sensitive_values(value))
+            else:
+                sensitive.append(value == sensitive_values)
+
+        return all(sensitive)

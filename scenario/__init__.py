@@ -25,9 +25,12 @@ class State(object):
         s = ", ".join(lst)
         return f"<{s}>"
 
-    def __getitem__(self, feature: Feature):
+    def __getitem__(self, feature: Union[Feature, List[Feature]]):
         """Get the value of a given feature"""
-        return self.sample_dict[feature]
+        if isinstance(feature, Feature):
+            return self.sample_dict[feature]
+        else:
+            return [self.sample_dict[f] for f in feature]
 
     def to_array(self, return_features=False):
         """Return the state as a numpy array of the values"""
@@ -146,6 +149,7 @@ class FeatureBias(object):
         self.features = features
         self.feature_values = feature_values
         self.bias = bias
+        self._features = None
 
     def get_bias(self, state: State):
         """Get the amount of bias to add to the goodness score for the given state"""
@@ -184,6 +188,8 @@ class Scenario(object):
         self.features = features
         self.nominal_features = nominal_features
         self.numerical_features = numerical_features
+        self._nom_indices = None
+        self._num_indices = None
 
     def generate_sample(self):
         """Generate a sample"""
@@ -235,23 +241,11 @@ class Scenario(object):
 
     def similarity_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                           distance="HMOM", alpha=1.0, exp=True):
-        if distance.startswith("H") and distance.endswith("OM"):
-            # TODO: ndarray as input support _normalise_features
-            assert not (isinstance(state1, np.ndarray) or isinstance(state2, np.ndarray))
-            num1 = np.array(self._normalise_features(state1, self.numerical_features))
-            nom1 = np.array(state1.get_features(self.nominal_features))
-            num2 = np.array(self._normalise_features(state2, self.numerical_features))
-            nom2 = np.array(state2.get_features(self.nominal_features))
-            # Heterogeneous Euclidean-Overlap Metric (HEOM)
-            if distance == 'HEOM':
-                d = np.sum(np.abs(num1 - num2)) + np.sum(nom1 != nom2)
-            # Heterogeneous Manhattan-Overlap Metric (HMOM)
-            elif distance == 'HMOM':
-                d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
-            else:
-                raise ValueError(f"Expected distance: HEOM or HMOM. Got: {distance}")
-            return np.exp(-alpha * d) if exp else d
-
+        if isinstance(distance, types.FunctionType):
+            # noinspection PyCallingNonCallable
+            return distance(state1, state2)
+        elif distance.startswith("H") and distance.endswith("OM"):
+            return self.H_OM_distance(state1, state2, distance, alpha, exp)
         # Minkowski distance between two 1-D arrays (minkowski)
         elif distance == "minkowski":
             d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
@@ -261,6 +255,22 @@ class Scenario(object):
             return d
         else:
             raise ValueError(f"Expected one of [HEOM, HMOM, minkowski, braycurtis]. Got: {distance}")
+
+    def H_OM_distance(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
+                      distance="HMOM", alpha=1.0, exp=True):
+        num1 = self._normalise_features(state1, indices=self._num_indices)  # Only returns features
+        nom1 = self._normalise_features(state1, indices=self._nom_indices)  # Only returns features
+        num2 = self._normalise_features(state2, indices=self._num_indices)  # Only returns features
+        nom2 = self._normalise_features(state2, indices=self._nom_indices)  # Only returns features
+        # Heterogeneous Euclidean-Overlap Metric (HEOM)
+        if distance == 'HEOM':
+            d = np.sum(np.abs(num1 - num2)) + np.sum(nom1 != nom2)
+        # Heterogeneous Manhattan-Overlap Metric (HMOM)
+        elif distance == 'HMOM':
+            d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
+        else:
+            raise ValueError(f"Expected distance: HEOM or HMOM. Got: {distance}")
+        return np.exp(-alpha * d) if exp else d
 
     def minkowski_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                          p=2, w=None):
@@ -272,7 +282,8 @@ class Scenario(object):
         norm1, norm2 = self.state_to_array(state1), self.state_to_array(state2)
         return braycurtis(norm1, norm2, w=w)
 
-    def _normalise_features(self, state: CombinedState, features: List[Feature] = None):
+    def _normalise_features(self, state: Union[CombinedState, np.ndarray], features: List[Feature] = None,
+                            indices=None):
         raise NotImplementedError
 
     def state_to_array(self, state: Union[CombinedState, np.ndarray]):

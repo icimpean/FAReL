@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import List
+from typing import List, Union
 
 import numpy as np
 
@@ -36,6 +36,7 @@ individual_features = [f for f in FraudFeature if f not in context_features]
 class TransactionModelMDP(Scenario):
     def __init__(self, transaction_model, do_reward_shaping=False, num_transactions=None):
         # Super call
+        self._features = None
         features = [feature for feature in FraudFeature]
         nominal_features = [FraudFeature.card_id, FraudFeature.merchant_id, FraudFeature.country,
                             FraudFeature.continent, FraudFeature.currency]
@@ -174,10 +175,28 @@ class TransactionModelMDP(Scenario):
 
     def step(self, action):
         self.authorise_transaction(self.customer, action)
+        self.generate_sample()
+        return self.state, self.reward, self.done, self.info
+
+    def generate_sample(self):
         next_customer = self._get_customer()
         self.customer = next_customer
         self.state = self.full_state(self.customer, self.transaction_model)
-        return self.state, self.reward, self.done, self.info
+        return self.state
+
+    def calc_goodness(self, sample: CombinedState):
+        return self.customer.fraudster
+
+    def calculate_rewards(self, sample: CombinedState, goodness):
+        reward_ignore = 1
+        reward_authenticate = -1
+
+        if self.customer.fraudster:
+            reward_ignore *= -1
+            reward_authenticate *= -1
+
+        rewards = {FraudActions.ignore: reward_ignore, FraudActions.authenticate: reward_authenticate}
+        return rewards
 
     def authorise_transaction(self, customer, action):
         # ask the user for authentication
@@ -196,11 +215,17 @@ class TransactionModelMDP(Scenario):
         #     if reward > 0:  # transaction was successful
         #         if action == 0:
         #             reward += 0.2
+        # if self.do_reward_shaping:  # TODO
+        #     if reward > 0:
+        #         reward = 1
+        #     else:
+        #         reward = -1  # negative initial reward means lost amount ==> fraud
         if self.do_reward_shaping:  # TODO
             if reward > 0:
                 reward = 1
-            else:
+            elif reward < 0:
                 reward = -1  # negative initial reward means lost amount ==> fraud
+            # else: reward = 0
 
         if customer.fraudster:
             self.transaction_model.fraudulent_transactions += 1
@@ -222,11 +247,19 @@ class TransactionModelMDP(Scenario):
                      else FraudActions.ignore.value, "fraudster": customer.fraudster}
         self.t += 1
 
-    def _normalise_features(self, state: CombinedState, features: List[FraudFeature] = None):
+    def _normalise_features(self, state: Union[CombinedState, np.ndarray], features: List[FraudFeature] = None,
+                            indices=None):
         if features is None:
             features = [f for f in FraudFeature]
-        new_values = self.normalise_state(state)
-        new_values = np.array([v for f, v in zip(features, new_values) if f in individual_features])
+        if isinstance(state, CombinedState):
+            new_values = self.normalise_state(state)
+            new_values = np.array([v for f, v in zip(features, new_values) if f in individual_features])
+        else:
+            # Already transformed into array, return requested features
+            if indices:
+                new_values = state[indices]
+            else:
+                new_values = np.array([state[i] for i, f in enumerate(self._features) if f in features])
         return new_values
 
     def _get_max_norm(self, parameter):
@@ -254,6 +287,12 @@ class TransactionModelMDP(Scenario):
             amount / self.maxima["amount"],
             currency / self.maxima["currency"],
         ])
+        if self._nom_indices is None:
+            self._features = [f for f in FraudFeature]
+            self._nom_indices = [i for i, f in enumerate([g for g in self._features if g in individual_features]) if
+                                 f in self.nominal_features]
+            self._num_indices = [i for i, f in enumerate([g for g in self._features if g in individual_features]) if
+                                 f in self.numerical_features]
         return norm_array
 
     def get_individual(self, state: CombinedState, normalise=True):
