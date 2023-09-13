@@ -480,7 +480,7 @@ class IndividualFairness(IndividualFairnessBase):
             y = np.array(actions)
 
             # compute consistency score
-            CON = - abs(actions - y[indices].mean(axis=1)).mean()
+            CON = - abs(actions - y.take(indices).mean(axis=1)).mean()
 
         diff = CON
 
