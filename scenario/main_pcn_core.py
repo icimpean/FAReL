@@ -598,6 +598,9 @@ if __name__ == '__main__':
     if args.single_objective != -1:
         args.objectives = [args.single_objective]
         print("Single objective:", args.objectives)
+        if args.objectives[0] >= 5:
+            args.distance_metrics = args.distance_metrics[:1]
+            print("Distance metric:", args.distance_metrics)
 
     if on_vsc:
         result_dir = "/data/brussel/104/vsc10437/Fairness/"
