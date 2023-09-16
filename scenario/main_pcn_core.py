@@ -690,8 +690,8 @@ if __name__ == '__main__':
 
     _ind_notions_mapping = {
         5: IndividualNotion.IndividualFairness,
-        # 6: IndividualNotion.ConsistencyScoreComplement,  # TODO: replace/remove
-        6: IndividualNotion.ConsistencyScoreComplementOnline,
+        6: IndividualNotion.ConsistencyScoreComplement,  # TODO: replace/remove
+        # 6: IndividualNotion.ConsistencyScoreComplementOnline,
     }
 
     all_individual_notions = [_ind_notions_mapping[o] for o in args.objectives if o >= 5]
