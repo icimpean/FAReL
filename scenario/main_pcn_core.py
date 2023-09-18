@@ -553,7 +553,7 @@ if __name__ == '__main__':
     # args.steps = 10000
     # # args.team_size = 100
     # # args.episode_length = args.team_size * 10
-    # args.window = 100
+    # args.window = 500
     # # args.window = None
     # # args.no_individual = 1
     # # args.default_objectives = 1
@@ -690,8 +690,8 @@ if __name__ == '__main__':
 
     _ind_notions_mapping = {
         5: IndividualNotion.IndividualFairness,
-        6: IndividualNotion.ConsistencyScoreComplement,  # TODO: replace/remove
-        # 6: IndividualNotion.ConsistencyScoreComplementOnline,
+        # 6: IndividualNotion.ConsistencyScoreComplement,  # TODO: replace/remove
+        6: IndividualNotion.ConsistencyScoreComplementOnline,
     }
 
     all_individual_notions = [_ind_notions_mapping[o] for o in args.objectives if o >= 5]

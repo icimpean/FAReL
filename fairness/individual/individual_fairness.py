@@ -1,3 +1,4 @@
+import heapq
 import operator
 import typing
 from collections import deque
@@ -104,6 +105,7 @@ class IndividualFairness(IndividualFairnessBase):
         self._individual_comparisons = {d: {} for d in self.ind_distance_metrics}
         self._individual_last_window = {d: None for d in self.ind_distance_metrics}
         self._individual_total = {d: 0.0 for d in self.ind_distance_metrics}
+        self._last_ind = {d: [] for d in self.ind_distance_metrics}
         #
         self._csc_nbrs = {d: None for d in self.csc_distance_metrics}
 
@@ -161,9 +163,9 @@ class IndividualFairness(IndividualFairnessBase):
             # Store data at individual with lowest index: comparison gets removed with individual when moving out
             #   of the sliding window. Remove earliest individual from deque if outside window.
             if len(self._individual_last_window[distance_metric]) == history.window:
-                last = self._individual_last_window[distance_metric][0]
+                last, _ = self._individual_last_window[distance_metric][0]
                 self._individual_total[distance_metric] -= np.nansum(last)
-            self._individual_last_window[distance_metric].append([])
+            self._individual_last_window[distance_metric].append(([], deque(maxlen=history.window)))  # diffs, deque/heap
 
         # Windowed + full history
         if not is_discounted:
@@ -175,7 +177,12 @@ class IndividualFairness(IndividualFairnessBase):
                     total += diff
                 if with_window:
                     # j is a previously encountered individual, i is current
-                    self._individual_last_window[distance_metric][j].append(diff)
+                    self._individual_last_window[distance_metric][j][0].append(diff)
+                    #
+                    if len(self._individual_last_window[distance_metric][j][1]) == history.window:
+                        self._individual_last_window[distance_metric][j][1].popleft()
+                    self._individual_last_window[distance_metric][j][1].append((d, i, diff, actions[i], actions[j]))
+                    self._individual_last_window[distance_metric][i][1].append((d, j, diff, actions[j], actions[i]))
 
                 # Exact fair
                 if fair:
@@ -192,7 +199,12 @@ class IndividualFairness(IndividualFairnessBase):
             for i, j, fair, diff, D, d in results:
                 # j is a previously encountered individual, i is current
                 shifted_j = j - shifted_n
-                self._individual_last_window[distance_metric][shifted_j].append(diff)
+                self._individual_last_window[distance_metric][shifted_j][0].append(diff)
+                #
+                if len(self._individual_last_window[distance_metric][shifted_j][1]) == history.window:
+                    self._individual_last_window[distance_metric][shifted_j][1].popleft()
+                self._individual_last_window[distance_metric][shifted_j][1].append((d, i, diff, actions[i], actions[shifted_j]))
+                self._individual_last_window[distance_metric][i][1].append((d, shifted_j, diff, actions[shifted_j], actions[i]))
                 # Exact fair
                 if fair:
                     continue
@@ -208,7 +220,7 @@ class IndividualFairness(IndividualFairnessBase):
             t = 0
             remove = 0
             for j in range(m - 1 - 1, -1, -1):
-                diffs_j = self._individual_last_window[distance_metric][j]
+                diffs_j = self._individual_last_window[distance_metric][j][0]
                 new_total = total + np.nansum(diffs_j) * (history.discount_factor ** t)
                 new_total_comparisons = total_comparisons + len(diffs_j) * (history.discount_factor ** t)
                 t += 1
@@ -253,86 +265,6 @@ class IndividualFairness(IndividualFairnessBase):
         choosing the latter action is higher
         """
         distance_metric, metric = distance_metric
-        unsatisfied = []
-        difference_per_ind = []
-        exact = True
-        combos = 0
-
-        states, actions, true_actions, scores, rewards = history.get_history()
-        individual_states = map(get_individual, states)
-        new_history = list(zip(individual_states, actions, true_actions, scores, rewards))
-        n = len(history.get_history()[0])
-
-        X, y = check_X_y(X, y)
-        n_neighbors = 5
-        # learn a KNN on the features
-        nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='ball_tree', metric=metric)
-        nbrs.fit(X)
-        indices = nbrs.kneighbors(X, return_distance=False)
-
-        new_history = sorted(new_history, key=lambda h: key_state(h[0], get_individual))
-        new_history = groupby(new_history, key=lambda h: key_state(h[0], get_individual))
-
-        if threshold is None:
-            threshold = 0
-
-        # For each state
-        for _, state_histories in new_history:
-            new_state_histories = list(state_histories)
-            # Only one individual/state => not enough info, assume fairness (TODO)
-            if len(new_state_histories) <= 1:
-                continue
-
-            counts = np.zeros(len(self.actions))
-            for state, action, true_action, score, reward in new_state_histories:
-                counts[action] += 1
-
-            probs = counts / np.sum(counts)
-
-            # TODO: pool
-            # num_threads = max(os.cpu_count(), 32)
-            num_threads = 2
-
-            map_i = [(i, state, action, true_action, score, reward, self.actions, alpha, probs)
-                     for i, (state, action, true_action, score, reward) in enumerate(new_state_histories)]
-            if len(map_i) > 500:
-                # TODO: this seems to be a bottleneck and works better single-threaded now that previous
-                #   comparisons are stored. Leaving it for frameworks with no window if it helps speed up the process there
-                with Pool(processes=num_threads) as pool:
-                    results = pool.map(_pool_weakly_meritocratic, map_i)
-            else:
-                results = [_pool_weakly_meritocratic(i) for i in map_i]
-
-            combos += len(results)
-            for i, fair, diff in results:
-                # Exact fair
-                if fair:
-                    continue
-                exact = False
-                # Not approx fair either
-                if not threshold or abs(diff) > threshold:
-                    individual_i = (states[i], actions[i], true_actions[i], scores[i], rewards[i])
-                    unsatisfied.append(individual_i)
-                    difference_per_ind.append(diff)
-
-        u = len(unsatisfied)
-        if exact:
-            approx = True
-        else:
-            approx = u == 0
-        diff = 0 if combos == 0 else u / combos
-        # TODO: what is more important, all pairs being satisfied under threshold
-        #  OR threshold pairs max that don't satisfy?
-
-        # print((exact, approx), diff, (unsatisfied, [], difference_per_ind))
-        # removed unsatisfied and difference_per_ind for performance
-        return (exact, approx), diff, ([], [], [])
-
-    def weakly_meritocratic_old(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=0,
-                            distance_metric="minkowski"):  # TODO: update with new history, with distance metric=> KNN?
-        """Never prefer one action over another if the long-term (discounted) reward of
-        choosing the latter action is higher
-        """
         unsatisfied = []
         difference_per_ind = []
         exact = True
@@ -447,40 +379,22 @@ class IndividualFairness(IndividualFairnessBase):
         """
         distance_metric, metric = distance_metric
         states, actions, _, _, _ = history.get_history()
-        # individual_states = list(map(lambda state: state.to_array(individual_only=True), states))
-        if isinstance(states[0], CombinedState):
-            individual_states = list(map(lambda state: get_individual(state, normalise=True), states))
-        else:
-            individual_states = states
-
-        # TODO: abstract n_neighbors
-        if self._csc_nbrs.get(distance_metric) is None:
-            dist_func = None
-            if distance_metric.startswith("H") and distance_metric.endswith("OM"):
-                dist_func = metric
-            elif distance_metric == "braycurtis":
-                dist_func = scipy.spatial.distance.braycurtis
-            elif distance_metric == "minkowski":
-                dist_func = scipy.spatial.distance.minkowski
-            dist_func = functools.partial(dist_func)
-
-            self._csc_nbrs[distance_metric] = neighbors.KNNClassifier(
-                engine=CSCLazySearch(dist_func=dist_func,  # TODO
-                                     window_size=history.window if history.window is not None else 500000))
-
-        # Add newest state-action pair
-        self._csc_nbrs[distance_metric].learn_one(individual_states[-1], actions[-1])
 
         n = len(actions)
         if n < 2:
             CON = -1.0
         else:
-            indices = [self._csc_nbrs[distance_metric]._nn.search([state], n_neighbors=min(n, 5), return_indices=True)
-                       for state in individual_states]
-            y = np.array(actions)
+            # Use distances already calculated and stored from individual fairness notion
+            #   (d, j, diff, actions[i], actions[j])
+            # nearest = [sorted(deq, key=lambda x: x[0])[:min(n, 5)] for _, deq in self._individual_last_window[distance_metric]]
+            nearest = [heapq.nsmallest(min(n, 5), deq) for _, deq in self._individual_last_window[distance_metric]]
+            n_actions = [np.mean([n[-2] for n in nn]) for nn in nearest]
+            actions = [[n[-1] for n in nn] for nn in nearest]
+            n_actions = np.array(n_actions)
+            actions = np.array([a[0] for a in actions])
 
             # compute consistency score
-            CON = - abs(actions - y.take(indices).mean(axis=1)).mean()
+            CON = - abs(actions - n_actions).mean()
 
         diff = CON
 
