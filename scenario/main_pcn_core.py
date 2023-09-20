@@ -575,7 +575,10 @@ if __name__ == '__main__':
     # args.objectives = [0, 1, 5, 6, 5, 6, 5, 6]
     # args.distance_metrics = ["braycurtis", "braycurtis", "HMOM", "HMOM", "HEOM", "HEOM"]
     # # args.objectives = [0, 1, 5, 5, 5]
-    # # args.distance_metrics = ["braycurtis", "HMOM", "HEOM"]
+    # args.objectives = [0, 1, 6, 6, 6]
+    # args.distance_metrics = ["braycurtis", "HMOM", "HEOM"]
+    # args.single_objective = 6
+    # args.distance_metrics = ["braycurtis"]
 
     print(args)
 
@@ -596,7 +599,7 @@ if __name__ == '__main__':
         args.window = None
 
     if args.single_objective != -1:
-        args.objectives = [args.single_objective]
+        args.objectives = [min(args.single_objective, 5)]  # Only reward and group notions are always kept, single individual notion gets index 5
         print("Single objective:", args.objectives)
         if args.objectives[0] >= 5:
             args.distance_metrics = args.distance_metrics[:1]
