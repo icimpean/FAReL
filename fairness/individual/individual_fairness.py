@@ -81,6 +81,7 @@ def _pool_weakly_meritocratic_knn(args):
 
     return i, is_fair, max_diff
 
+
 class IndividualFairness(IndividualFairnessBase):
     """A collection of fairness notions w.r.t. individuals.
 
@@ -100,14 +101,15 @@ class IndividualFairness(IndividualFairnessBase):
         }
         self.ind_distance_metrics = ind_distance_metrics
         self.csc_distance_metrics = csc_distance_metrics
+        all_metrics = set(ind_distance_metrics).union(csc_distance_metrics)
 
         # Don't recalculate individuals who have been compared already, they haven't changed
-        self._individual_comparisons = {d: {} for d in self.ind_distance_metrics}
-        self._individual_last_window = {d: None for d in self.ind_distance_metrics}
-        self._individual_total = {d: 0.0 for d in self.ind_distance_metrics}
-        self._last_ind = {d: [] for d in self.ind_distance_metrics}
+        self._individual_comparisons = {d: {} for d in all_metrics}
+        self._individual_last_window = {d: None for d in all_metrics}
+        self._individual_total = {d: 0.0 for d in all_metrics}
+        self._last_ind = {d: [] for d in all_metrics}
         #
-        self._csc_nbrs = {d: None for d in self.csc_distance_metrics}
+        # self._csc_nbrs = {d: None for d in self.csc_distance_metrics}
 
     def get_notion(self, notion: IndividualNotion, history: History, get_individual=lambda state: state, threshold=None,
                    similarity_metric=None, alpha=None, distance_metric=None):
@@ -141,7 +143,7 @@ class IndividualFairness(IndividualFairnessBase):
         is_discounted = isinstance(history, DiscountedHistory)
 
         # Keep track of the differences to discard once the window passes
-        if (with_window or is_discounted) and self._individual_last_window[distance_metric] is None:
+        if (with_window or is_discounted) and self._individual_last_window.get(distance_metric) is None:
             self._individual_last_window[distance_metric] = deque(maxlen=history.window)
 
         # Can only compare as many individuals as present in self._individual_last_window + 1,
@@ -165,10 +167,13 @@ class IndividualFairness(IndividualFairnessBase):
             if len(self._individual_last_window[distance_metric]) == history.window:
                 last, _ = self._individual_last_window[distance_metric][0]
                 self._individual_total[distance_metric] -= np.nansum(last)
-            self._individual_last_window[distance_metric].append(([], deque(maxlen=history.window)))  # diffs, deque/heap
+            self._individual_last_window[distance_metric].append(
+                ([], deque(maxlen=history.window)))  # diffs, deque/heap
 
         # Windowed + full history
         if not is_discounted:
+            if self._individual_total.get(distance_metric) is None:
+                self._individual_total[distance_metric] = 0.0
             total = self._individual_total[distance_metric]
             total_comparisons = n * (n - 1) // 2
 
@@ -203,8 +208,10 @@ class IndividualFairness(IndividualFairnessBase):
                 #
                 if len(self._individual_last_window[distance_metric][shifted_j][1]) == history.window:
                     self._individual_last_window[distance_metric][shifted_j][1].popleft()
-                self._individual_last_window[distance_metric][shifted_j][1].append((d, i, diff, actions[i], actions[shifted_j]))
-                self._individual_last_window[distance_metric][i][1].append((d, shifted_j, diff, actions[shifted_j], actions[i]))
+                self._individual_last_window[distance_metric][shifted_j][1].append(
+                    (d, i, diff, actions[i], actions[shifted_j]))
+                self._individual_last_window[distance_metric][i][1].append(
+                    (d, shifted_j, diff, actions[shifted_j], actions[i]))
                 # Exact fair
                 if fair:
                     continue
@@ -227,13 +234,14 @@ class IndividualFairness(IndividualFairnessBase):
 
                 # Check if difference is large enough
                 # noinspection PyUnresolvedReferences
-                if abs(total / max(1, total_comparisons) - new_total / new_total_comparisons) < history.discount_threshold:
+                if abs(total / max(1,
+                                   total_comparisons) - new_total / new_total_comparisons) < history.discount_threshold:
                     remove += 1
                     # Wait for comparisons of at least 5 consecutive individuals in the history
                     # to not pass the threshold
                     if remove >= 5:
                         # Remove all individuals before the given range
-                        print("discarding", j-1, "/", m)
+                        print("discarding", j - 1, "/", m)
 
                         for k in range(j - 1):
                             self._individual_last_window[distance_metric].popleft()
@@ -260,7 +268,8 @@ class IndividualFairness(IndividualFairnessBase):
         return (exact, approx), diff, ([], [], [])
 
     def weakly_meritocratic(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=0,
-                            distance_metric=("braycurtis", "braycurtis")):  # TODO: update with new history, with distance metric=> KNN?
+                            distance_metric=(
+                            "braycurtis", "braycurtis")):  # TODO: update with new history, with distance metric=> KNN?
         """Never prefer one action over another if the long-term (discounted) reward of
         choosing the latter action is higher
         """
@@ -379,6 +388,11 @@ class IndividualFairness(IndividualFairnessBase):
         """
         distance_metric, metric = distance_metric
         states, actions, _, _, _ = history.get_history()
+
+        # If individual fairness was not run yet for given distance metric, run it not to compute the distances
+        if distance_metric not in self.ind_distance_metrics:
+            self.individual_fairness(history, get_individual, threshold, similarity_metric, alpha=1.0,
+                                     distance_metric=(distance_metric, metric))
 
         n = len(actions)
         if n < 2:
