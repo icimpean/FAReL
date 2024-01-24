@@ -6,7 +6,10 @@ class IndividualNotion(Enum):
     IndividualFairness = auto()
     WeaklyMeritocratic = auto()
     ConsistencyScoreComplement = auto()
-    ConsistencyScoreComplementOnline = auto()
+    # Incremental nearest neighbour-based implementations
+    IndividualFairness_INN = auto()
+    WeaklyMeritocratic_INN = auto()  # TODO
+    ConsistencyScoreComplement_INN = auto()  # TODO
 
 
 ALL_INDIVIDUAL_NOTIONS = list(IndividualNotion)

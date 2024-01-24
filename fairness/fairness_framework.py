@@ -24,13 +24,12 @@ class FairnessFramework(object):
         history: The collection of state-action-score-reward tuples encountered by an agent
     """
     def __init__(self, actions, sensitive_attributes: Union[SensitiveAttribute, List[SensitiveAttribute]],
-                 threshold=None, get_individual=lambda state: state, similarity_metric=None,
+                 threshold=None, similarity_metric=None,
                  distance_metrics=[], alpha=None,
                  group_notions=None, individual_notions=None, window=None,
                  store_interactions=True, has_individual_fairness=True,
                  discount_factor=None, discount_threshold=None,
-                 visualise=False, visualise_cm=False, visualise_notions=False,
-                 visualise_reward=False, visualise_hist=False):
+                 inn_sensitive_features=None, seed=None, steps=None):
         self.actions = actions
         self.window = window
         self.store_interactions = store_interactions
@@ -46,16 +45,10 @@ class FairnessFramework(object):
         else:
             self.history = SlidingWindowHistory(actions, self.window, store_interactions=self.store_interactions,
                                                 has_individual_fairness=self.has_individual_fairness)
-        self.visualise = visualise
-        self.visualise_cm = visualise_cm
-        self.visualise_notions = visualise_notions
-        self.visualise_reward = visualise_reward
-        self.visualise_hist = visualise_hist
         #
         self.sensitive_attributes = [sensitive_attributes] \
             if isinstance(sensitive_attributes, SensitiveAttribute) else sensitive_attributes
         #
-        self.get_individual = get_individual
         self.similarity_metric = similarity_metric
         self.alpha = alpha
         #
@@ -65,14 +58,16 @@ class FairnessFramework(object):
         self.group_fairness = GroupFairness(actions)
         #
         self.individual_notions = individual_notions if individual_notions is not None else ALL_INDIVIDUAL_NOTIONS
-        self.distance_metrics = distance_metrics if individual_notions is not None else ["braycurtis"] * len(ALL_INDIVIDUAL_NOTIONS)
         if not self.has_individual_fairness:
             self.individual_notions = []
+        self.distance_metrics = distance_metrics if individual_notions is not None else ["braycurtis"] * len(ALL_INDIVIDUAL_NOTIONS)
+
         ind_metrics = [d for n, d in zip(self.individual_notions, self.distance_metrics)
                        if n is IndividualNotion.IndividualFairness]
         csc_metrics = [d for n, d in zip(self.individual_notions, self.distance_metrics)
                        if n is IndividualNotion.ConsistencyScoreComplement]
-        self.individual_fairness = IndividualFairness(actions, ind_metrics, csc_metrics)
+        self.individual_fairness = IndividualFairness(actions, ind_metrics, csc_metrics, inn_sensitive_features, seed,
+                                                      steps)
 
         self.all_notions = self.group_notions + self.individual_notions
 
@@ -94,10 +89,11 @@ class FairnessFramework(object):
         """Get the given group notion"""
         return self.group_fairness.get_notion(group_notion, self.history, sensitive_attribute, threshold)
 
-    def get_individual_notion(self, individual_notion: IndividualNotion, get_individual=lambda state: state,
-                              threshold=None, similarity_metric=None, alpha=None, distance_metric=("braycurtis", "braycurtis")):
+    def get_individual_notion(self, individual_notion: IndividualNotion,
+                              threshold=None, similarity_metric=None, alpha=None,
+                              distance_metric=("braycurtis", "braycurtis")):
         """Get the given individual notion"""
-        return self.individual_fairness.get_notion(individual_notion, self.history, get_individual, threshold,
+        return self.individual_fairness.get_notion(individual_notion, self.history, threshold,
                                                    similarity_metric, alpha, distance_metric)
 
 
@@ -111,6 +107,11 @@ class ExtendedfMDP(object):
         self.fairness_framework = fairness_framework
         if not self.fairness_framework.store_interactions and self.fairness_framework.has_individual_fairness:
             self.fairness_framework.history.store_state_array = env.state_to_array
+        self.H_OM_distance = {
+            distance_metric: lambda state1, state2: self.env.H_OM_distance(state1, state2, distance_metric,
+                                                                           self.fairness_framework.alpha, exp=True)
+            for distance_metric in ["HEOM", "HMOM"]
+        }
 
         #
         self._t = -1
@@ -155,12 +156,15 @@ class ExtendedfMDP(object):
         for notion, distance_metric in zip(self.fairness_framework.individual_notions,
                                            self.fairness_framework.distance_metrics):
             if distance_metric.startswith("H") and distance_metric.endswith("OM"):
-                metric = lambda state1, state2: self.env.H_OM_distance(state1, state2, distance_metric,
-                                                                       self.fairness_framework.alpha, exp=True)
+                # metric = lambda state1, state2: self.env.H_OM_distance(state1, state2, distance_metric,
+                #                                                        self.fairness_framework.alpha, exp=True)
+                metric = self.H_OM_distance[distance_metric]
+            elif distance_metric == "braycurtis":
+                metric = self.env.braycurtis_metric  # TODO: w
             else:
                 metric = distance_metric
             (exact, approx), diff, (u_ind, u_pairs, U_diff) = \
-                self.fairness_framework.get_individual_notion(notion, self.fairness_framework.get_individual,
+                self.fairness_framework.get_individual_notion(notion,
                                                               self.fairness_framework.threshold,
                                                               self.fairness_framework.similarity_metric,
                                                               self.fairness_framework.alpha,

@@ -1,22 +1,23 @@
+from __future__ import annotations
+
 import heapq
-import operator
+import math
+import time
 import typing
 from collections import deque
 from enum import Enum
 from itertools import groupby
 from multiprocessing import Pool
+from pstats import SortKey
 
 import numpy as np
 import scipy.spatial.distance
-from aif360.sklearn.metrics import consistency_score
-from river.neighbors.base import FunctionWrapper
-from sklearn.neighbors import NearestNeighbors
-from sklearn.utils import check_X_y
-import functools
 from river import neighbors
+from river.neighbors.ann.nn_vertex import Vertex
+from river.neighbors.base import FunctionWrapper, DistanceFunc
 
-from fairness.individual import IndividualNotion, IndividualFairnessBase
 from fairness.history import History, DiscountedHistory
+from fairness.individual import IndividualNotion, IndividualFairnessBase
 from scenario import CombinedState
 
 
@@ -30,21 +31,35 @@ def dict_to_array(d):
     return np.array(a, dtype=float)
 
 
-def key_state(s, get_individual):
+def key_state(s):
     return str(dict_to_array(s))
 
 
-def hellinger(p, q):
-    return np.sum([(np.sqrt(t1) - np.sqrt(t2)) * (np.sqrt(t1) - np.sqrt(t2))
-                   for t1, t2 in zip(p, q)]) / np.sqrt(2)
+SQRT2 = np.sqrt(2)
+
+
+def hellinger(p, q, num_actions):
+    # Slightly faster computation time
+    if num_actions == 2:
+        sqrt_0_1_2 = np.sqrt(p[0]) - np.sqrt(q[0])
+        sqrt_1_1_2 = np.sqrt(p[1]) - np.sqrt(q[1])
+        total = (sqrt_0_1_2 * sqrt_0_1_2) + (sqrt_1_1_2 * sqrt_1_1_2)
+        h_dist = np.sqrt(total) / SQRT2
+    else:
+        total = 0
+        for i in range(num_actions):
+            sqrt1_2 = np.sqrt(p[i]) - np.sqrt(q[i])
+            total += (sqrt1_2 * sqrt1_2)
+        h_dist = np.sqrt(total) / SQRT2
+    return h_dist
 
 
 def _pool_individual_fairness(args):
-    i, j, state_i, state_j, score_i, score_j, similarity_metric, alpha, distance_metric = args
+    i, j, state_i, state_j, score_i, score_j, similarity_metric, alpha, distance_metric, num_actions = args
     d = similarity_metric(state_i, state_j, alpha=alpha, distance=distance_metric)
-    D = hellinger(score_i, score_j)
+    D = hellinger(score_i, score_j, num_actions=num_actions)
     # print(score_i, score_j, D, d, d - D)
-    # i, j Fair, difference, D, d
+    # i, j, Fair, difference, D, d
     return i, j, D <= d, d - D, D, d
 
 
@@ -89,7 +104,8 @@ class IndividualFairness(IndividualFairnessBase):
             actions: A list of enumerations, representing the actions to check fairness for.
         """
 
-    def __init__(self, actions, ind_distance_metrics, csc_distance_metrics):
+    def __init__(self, actions, ind_distance_metrics, csc_distance_metrics, inn_sensitive_features=None, seed=None,
+                 steps=None):
         # Super call
         super(IndividualFairness, self).__init__(actions)
         # Mapping from enumeration to fairness method
@@ -97,7 +113,8 @@ class IndividualFairness(IndividualFairnessBase):
             IndividualNotion.IndividualFairness: self.individual_fairness,
             IndividualNotion.WeaklyMeritocratic: self.weakly_meritocratic,
             IndividualNotion.ConsistencyScoreComplement: self.consistency_score_complement,
-            IndividualNotion.ConsistencyScoreComplementOnline: self.consistency_score_complement_online,
+            #
+            IndividualNotion.ConsistencyScoreComplement_INN: self.consistency_score_complement_inn,
         }
         self.ind_distance_metrics = ind_distance_metrics
         self.csc_distance_metrics = csc_distance_metrics
@@ -110,14 +127,17 @@ class IndividualFairness(IndividualFairnessBase):
         self._last_ind = {d: [] for d in all_metrics}
         #
         # self._csc_nbrs = {d: None for d in self.csc_distance_metrics}
+        self._neighbours = None
+        self.inn_sensitive_features = inn_sensitive_features
+        self.seed = seed
+        self.steps = steps
 
-    def get_notion(self, notion: IndividualNotion, history: History, get_individual=lambda state: state, threshold=None,
+    def get_notion(self, notion: IndividualNotion, history: History, threshold=None,
                    similarity_metric=None, alpha=None, distance_metric=None):
         # noinspection PyArgumentList
-        # print("get_notion", notion)
-        return self._map[notion](history, get_individual, threshold, similarity_metric, alpha, distance_metric)
+        return self._map[notion](history, threshold, similarity_metric, alpha, distance_metric)
 
-    def individual_fairness(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=1.0,
+    def individual_fairness(self, history: History, threshold=None, similarity_metric=None, alpha=1.0,
                             distance_metric=("braycurtis", "braycurtis")):
         """Let i and j be two individuals represented by their attributes values vectors v_i and v_j.
         Let d(v_i,v_j) represent the similarity distance between individuals i and j.
@@ -127,17 +147,11 @@ class IndividualFairness(IndividualFairnessBase):
         D(M(v_i), M(v_j)) ≤ d(v_i, v_j)
         """
         distance_metric, metric = distance_metric
-        unsatisfied_pairs = []
-        difference_per_pair = []
         states, actions, true_actions, scores, rewards = history.get_history()
-        ids = history.ids
         n = len(states)
+        num_actions = len(self.actions)
         lowest_n = 0
-        combos = 0
         exact = True
-
-        # num_threads = max(os.cpu_count(), 32)
-        num_threads = 4
 
         with_window = history.window is not None
         is_discounted = isinstance(history, DiscountedHistory)
@@ -157,9 +171,9 @@ class IndividualFairness(IndividualFairnessBase):
         i = n - 1
         for j in range((n - 1) - 1, lowest_n - 1, -1):  # Run range(lowest_n, n - 1) backwards for is_discounted
             map_i_j.append((i, j, states[i], states[j], scores[i], scores[j],
-                            similarity_metric, alpha, metric))
-        results = [_pool_individual_fairness(ij) for ij in map_i_j]
+                            similarity_metric, alpha, metric, num_actions))
         unsatisfied_pairs = 0
+        results = [_pool_individual_fairness(ij) for ij in map_i_j]
 
         if with_window or is_discounted:
             # Store data at individual with lowest index: comparison gets removed with individual when moving out
@@ -251,25 +265,26 @@ class IndividualFairness(IndividualFairnessBase):
 
                 total = new_total
                 total_comparisons = new_total_comparisons
-            # total_comparisons = t * (t - 1) // 2
-            # print("ind_fairness", t, total_comparisons)
 
         if exact:
             approx = True
         else:
             approx = unsatisfied_pairs == 0
 
-        diff = total / max(1, total_comparisons)
-        diff = diff - 1.0  # Maximise diff (negative is unfair) & shift from [0, 1] to [-1, 0] like the group notions
+        # < 2 individuals encountered, assume it's fair
+        if n < 2:
+            diff = 0.0
+        else:
+            diff = total / max(1, total_comparisons)
+            diff = diff - 1.0  # Maximise diff (negative is unfair) & shift from [0, 1] to [-1, 0] like the group notions
 
         self._individual_total[distance_metric] = total
 
         # removed unsatisfied_pairs and difference_per_pair for performance
         return (exact, approx), diff, ([], [], [])
 
-    def weakly_meritocratic(self, history: History, get_individual, threshold=None, similarity_metric=None, alpha=0,
-                            distance_metric=(
-                            "braycurtis", "braycurtis")):  # TODO: update with new history, with distance metric=> KNN?
+    def weakly_meritocratic(self, history: History, threshold=None, similarity_metric=None, alpha=0,
+                            distance_metric=("braycurtis", "braycurtis")):  # TODO: update with new history, with distance metric=> KNN?
         """Never prefer one action over another if the long-term (discounted) reward of
         choosing the latter action is higher
         """
@@ -280,12 +295,11 @@ class IndividualFairness(IndividualFairnessBase):
         combos = 0
 
         states, actions, true_actions, scores, rewards = history.get_history()
-        individual_states = map(get_individual, states)
-        new_history = list(zip(individual_states, actions, true_actions, scores, rewards))
+        new_history = list(zip(states, actions, true_actions, scores, rewards))
         n = len(history.get_history()[0])
 
-        new_history = sorted(new_history, key=lambda h: key_state(h[0], get_individual))
-        new_history = groupby(new_history, key=lambda h: key_state(h[0], get_individual))
+        new_history = sorted(new_history, key=lambda h: key_state(h[0]))
+        new_history = groupby(new_history, key=lambda h: key_state(h[0]))
 
         if threshold is None:
             threshold = 0
@@ -342,7 +356,7 @@ class IndividualFairness(IndividualFairnessBase):
         # removed unsatisfied and difference_per_ind for performance
         return (exact, approx), diff, ([], [], [])
 
-    def consistency_score_complement(self, history: History, get_individual, threshold=None, similarity_metric=None,
+    def consistency_score_complement(self, history: History, threshold=None, similarity_metric=None,
                                      alpha=None, distance_metric=("braycurtis", "braycurtis")):
         """Individual fairness metric from [1] that measures how similar the labels are for similar instances.
 
@@ -353,54 +367,18 @@ class IndividualFairness(IndividualFairnessBase):
         """
         distance_metric, metric = distance_metric
         states, actions, _, _, _ = history.get_history()
-        # individual_states = list(map(lambda state: state.to_array(individual_only=True), states))
-        if isinstance(states[0], CombinedState):
-            individual_states = list(map(lambda state: get_individual(state, normalise=True), states))
-        else:
-            individual_states = states
 
-        n = len(actions)
-
-        if n < 2:
-            CON = -1.0
-        else:
-            # TODO: abstract n_neighbors
-            CON = consistency_score_metric(individual_states, actions, n_neighbors=min(n, 5),
-                                           distance_metric=metric)
-        diff = CON
-
-        exact = diff == 0
-        approx = diff > -threshold if threshold else exact
-
-        unsatisfied = []
-        difference_per_ind = []
-
-        return (exact, approx), diff, (unsatisfied, [], difference_per_ind)
-
-    def consistency_score_complement_online(self, history: History, get_individual, threshold=None, similarity_metric=None,
-                                            alpha=None, distance_metric=("braycurtis", "braycurtis")):
-        """Individual fairness metric from [1] that measures how similar the labels are for similar instances.
-
-        1 - \frac{1}{n}\sum_{i=1}^n |\hat{y}_i - \frac{1}{\text{n_neighbors}} \sum_{j\in\mathcal{N}_{\text{n_neighbors}}(x_i)} \hat{y}_j|
-
-        [1]	R. Zemel, Y. Wu, K. Swersky, T. Pitassi, and C. Dwork, “Learning Fair Representations,”
-            International Conference on Machine Learning, 2013.
-        """
-        distance_metric, metric = distance_metric
-        states, actions, _, _, _ = history.get_history()
-
-        # If individual fairness was not run yet for given distance metric, run it not to compute the distances
+        # If individual fairness was not run yet for given distance metric, run it to compute the distances
         if distance_metric not in self.ind_distance_metrics:
-            self.individual_fairness(history, get_individual, threshold, similarity_metric, alpha=1.0,
+            self.individual_fairness(history, threshold, similarity_metric, alpha=1.0,
                                      distance_metric=(distance_metric, metric))
 
         n = len(actions)
         if n < 2:
-            CON = -1.0
+            CON = 0.0
         else:
             # Use distances already calculated and stored from individual fairness notion
             #   (d, j, diff, actions[i], actions[j])
-            # nearest = [sorted(deq, key=lambda x: x[0])[:min(n, 5)] for _, deq in self._individual_last_window[distance_metric]]
             nearest = [heapq.nsmallest(min(n, 5), deq) for _, deq in self._individual_last_window[distance_metric]]
             n_actions = [np.mean([n[-2] for n in nn]) for nn in nearest]
             actions = [[n[-1] for n in nn] for nn in nearest]
@@ -420,33 +398,598 @@ class IndividualFairness(IndividualFairnessBase):
 
         return (exact, approx), diff, (unsatisfied, [], difference_per_ind)
 
+    def consistency_score_complement_inn(self, history: History, threshold=None, similarity_metric=None,
+                                         alpha=None, distance_metric=("braycurtis", "braycurtis")):
+        """Individual fairness metric from [1] that measures how similar the labels are for similar instances.
 
-def consistency_score_metric(X, y, n_neighbors=5, distance_metric="minkowski"):
-    """Compute the consistency score, based on aif360.sklearn.metrics.consistency_score
-    with optional distance metric. Default for algorithm='ball_tree' is metric='minkowski'
+        1 - \frac{1}{n}\sum_{i=1}^n |\hat{y}_i - \frac{1}{\text{n_neighbors}} \sum_{j\in\mathcal{N}_{\text{n_neighbors}}(x_i)} \hat{y}_j|
+
+        [1]	R. Zemel, Y. Wu, K. Swersky, T. Pitassi, and C. Dwork, “Learning Fair Representations,”
+            International Conference on Machine Learning, 2013.
+        """
+        distance_metric, metric = distance_metric
+        states, actions, _, _, _ = history.get_history()
+
+        state = states[-1]
+        action = actions[-1]
+        sensitive_features = tuple(state[self.inn_sensitive_features])
+        # print(sensitive_features)
+
+        # TODO:
+        if isinstance(distance_metric, str) and distance_metric == "braycurtis":
+            metric = scipy.spatial.distance.braycurtis
+
+        def _init_swinn():
+            window = self.steps if history.window is None else history.window
+            return SWINN(graph_k=10, dist_func=FunctionWrapper(metric), maxlen=window,
+                         # warm_up=499,  # TODO: 500
+                         warm_up=99 if self.inn_sensitive_features else 499,  # TODO: 500
+                         max_candidates=None, delta=0.0001, prune_prob=0.0, n_iters=10, seed=self.seed)
+
+        # Initialisation
+        if self._neighbours is None:
+            # All together
+            if self.inn_sensitive_features is None:
+                self._neighbours = _init_swinn()
+            else:
+                self._neighbours = {sensitive_features: _init_swinn()}
+        #
+        if self.inn_sensitive_features is not None and self._neighbours.get(sensitive_features) is None:
+            self._neighbours[sensitive_features] = _init_swinn()
+
+        nbrs = self._neighbours if self.inn_sensitive_features is None else self._neighbours[sensitive_features]
+        # Add new individual to graph
+        nbrs.append((state, action))
+
+        n = len(actions)
+        if n < 2:
+            CON = 0.0
+        else:
+            if self.inn_sensitive_features is None:
+                # Retrieve nearest neighbours (item, nn, dists)
+                nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1)
+                n_actions = np.array([np.mean([n[1] for n in nn[1]]) for nn in nearest])
+                actions = np.array([n[0][1] for n in nearest])
+            else:
+                n_actions = []
+                actions = []
+                for sf, nbrs in self._neighbours.items():
+                    nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1)
+                    na = np.array([np.mean([n[1] for n in nn[1]]) for nn in nearest])
+                    a = np.array([n[0][1] for n in nearest])
+                    n_actions.append(na)
+                    actions.append(a)
+                n_actions = np.hstack(n_actions)
+                actions = np.hstack(actions)
+
+            if history.t % 500 == 0:
+                import pickle
+                if self.inn_sensitive_features:
+                    for sf, nbrs in self._neighbours.items():
+                        print(sf, len(nbrs._data))
+                        graph = nbrs.get_graph()
+                        with open(f"SWINN_graph_{sf}_{distance_metric}_{history.t}.pickle", mode="wb") as file:
+                            pickle.dump(graph, file)
+                else:
+                    graph = nbrs.get_graph()
+                    with open(f"SWINN_graph_{distance_metric}_{history.t}.pickle", mode="wb") as file:
+                        pickle.dump(graph, file)
+                    exit()
+
+            # compute consistency score
+            CON = - abs(actions - n_actions).mean()
+
+        diff = CON
+
+        exact = diff == 0
+        approx = diff > -threshold if threshold else exact
+
+        unsatisfied = []
+        difference_per_ind = []
+
+        return (exact, approx), diff, (unsatisfied, [], difference_per_ind)
+
+
+class SWINN(neighbors.SWINN):
+    def get_nn_for_all(self, k, epsilon: float = 0.1):
+        """Get the nearest neighbours for all individuals in the graph"""
+        return [(p.item, *self.search(p.item, k, epsilon)) for p in self]
+        # equivalent to
+        # return [(self[item_id].item, [self[item_id].item] + [p[-1] for p in heapq.nsmallest(k - 1, self.individual_heaps[item_id])])
+        #         for item_id in range(len(self))]
+
+    def _linear_scan(self, item, k):
+        # Lazy search while the warm-up period is not finished
+        return super(SWINN, self)._linear_scan(item, k)
+
+    def _search(self, item, k, epsilon: float = 0.1, seed=None, exclude=None) -> tuple[list, list]:
+        return super(SWINN, self)._search(item, k, epsilon, seed, exclude)
+
+    def get_graph(self):
+        """Get the graph structure"""
+        nodes = []
+        edges = []
+        for i, node in enumerate(self._data):
+            # print(node.uuid)
+            ind, action = node.item
+            # Get node id for display
+            # TODO: abstract getters to work for other environments
+            age, gender, degree, experience, married, extra_degree, nationality, dutch, french, english, german = ind
+            nat = "belgian" if nationality == 0.0 else "foreign"
+            gen = "man" if gender == 0.0 else "woman"
+            selector_id = f"{nat}_{gen}"
+            if married:
+                selector_id += f"_married"
+            if degree:
+                selector_id += f"_degree"
+            if extra_degree:
+                selector_id += f"_extra-degree"
+            if dutch:
+                selector_id += f"_dutch"
+            if french:
+                selector_id += f"_french"
+            if english:
+                selector_id += f"_english"
+            if german:
+                selector_id += f"_german"
+            hired = "rejected" if action == 0 else "hired"
+            selector_id += f"_{hired}"
+
+            label = f"(Node {node.uuid}) Age {int(age * (65 - 18) + 18)}, Exp. {int(experience * (65 - 18))}"
+
+            # Add node
+            nodes.append({"classes": ['node', "individual", selector_id],
+                          "data": {"id": node.uuid, "label": label,
+                                   "individual": ind,
+                                   "action": action,
+                                   }})
+
+            # Add neighbours
+            # print(node.neighbors())
+            for n, distance in zip(*node.neighbors()):
+                # Round for visibility
+                dist = round(distance, 5)
+
+                edge = {'classes': ['edge', "nn"],
+                        'data': {'id': f"{node.uuid}_{n.uuid}", 'source': node.uuid, 'target': n.uuid,
+                                 'weight': dist,  # 'opacity': max(dist, 0.25),
+                                 'arrow_weight': 1.5}}
+                edges.append(edge)
+
+        output = {
+            'id': 'cytoscape-neighbours',
+            'elements': nodes + edges,
+        }
+        print(len(nodes), "nodes,", len(edges), "edges")
+        return output
+
+
+class OptimisedVertex(Vertex):
+    """Optimised SWINN Vertex"""
+
+    def __init__(self, item, uuid: int) -> None:
+        # Super call
+        super(OptimisedVertex, self).__init__(item, uuid)
+        #
+        self.neighbours: set[OptimisedVertex] = set()
+        self.search_up_to_date = False
+        self._search_neighbours = None
+        self._search_distributions = None
+
+    def __hash__(self) -> int:
+        return self.uuid
+
+    def __eq__(self, other) -> bool:
+        return self.uuid == other.uuid
+
+    def __lt__(self, other) -> bool:
+        return self.uuid < other.uuid
+
+    def not_up_to_date(self):
+        self.search_up_to_date = False
+        self._search_neighbours = None
+        self._search_distributions = None
+
+    def fill(self, neighbors: list[OptimisedVertex], dists: list[float]):
+        for n, dist in zip(neighbors, dists):
+            self.edges[n] = dist
+            self.flags.add(n)
+            n.r_edges[self] = dist
+            #
+            self.neighbours.add(n)
+            n.neighbours.add(self)
+            #
+            n.not_up_to_date()
+
+        # Neighbors are ordered by distance
+        self.worst_edge = n
+        self.not_up_to_date()
+
+    def farewell(self):
+        # Super call
+        super(OptimisedVertex, self).farewell()
+        #
+        self.neighbours = None
+
+    def add_edge(self, vertex: OptimisedVertex, dist):
+        # Super call
+        super(OptimisedVertex, self).add_edge(vertex, dist)
+        #
+        self.neighbours.add(vertex)
+        vertex.neighbours.add(self)
+        self.not_up_to_date()
+        vertex.not_up_to_date()
+
+    def rem_edge(self, vertex: OptimisedVertex):
+        # Super call
+        super(OptimisedVertex, self).rem_edge(vertex)
+        #
+        vertex.neighbours.discard(self)
+        self.neighbours.discard(vertex)
+        self.not_up_to_date()
+        vertex.not_up_to_date()
+
+    def is_neighbor(self, vertex):
+        return vertex in self.neighbours
+
+    def all_neighbors(self):
+        return self.neighbours
+
+
+class OptimisedSWINN(neighbors.SWINN):
+    """Optimised version of SWINN
+
+    TODO: ASSUMPTION: for some methods, the item requesting a search query is in the graph itself:
+        retrieve its nearest neighbours. For items that are explicitly mentioned to (possibly) NOT be in the graph,
+        the default implementations are used.
     """
-    # print(distance_metric)
-    # cast as ndarrays
-    X, y = check_X_y(X, y)
-    # learn a KNN on the features
-    nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='ball_tree', metric=distance_metric)
-    nbrs.fit(X)
-    indices = nbrs.kneighbors(X, return_distance=False)
 
-    # compute consistency score
-    return - abs(y - y[indices].mean(axis=1)).mean()
+    def __init__(self, graph_k: int = 20,
+                 dist_func: DistanceFunc | FunctionWrapper | None = None,
+                 maxlen: int = 1000,
+                 warm_up: int = 500,
+                 max_candidates: int = None,
+                 delta: float = 0.0001,
+                 prune_prob: float = 0.0,
+                 n_iters: int = 10,
+                 seed: int = None, ):
+        # Super call
+        super(OptimisedSWINN, self).__init__(graph_k, dist_func, maxlen, warm_up, max_candidates,
+                                             delta, prune_prob, n_iters, seed)
+        # Store heap of sorted neighbours for linear scan during warm-up period
+        self.individual_heaps = {}
+        self.individual_comparisons = {}
+        self._t = 0
+
+    def _init_graph(self):
+        """Create a nearest neighbor graph from stored info. Original creates a random first.
+        This starts the graph from already computed distances/neighbours and continues the
+        standard refinement process."""
+        for vertex in self._data:
+            # Based on Vertex.fill(...) method
+            for (dist, t, n) in self.individual_heaps[vertex.uuid][:self.graph_k]:
+                vertex.edges[n] = dist
+                vertex.flags.add(n)
+                n.r_edges[vertex] = dist
+                #
+                vertex.neighbours.add(n)
+                n.neighbours.add(vertex)
+                #
+                n.not_up_to_date()
+            vertex.not_up_to_date()
+            # Neighbors are ordered by distance
+            vertex.worst_edge = n
+        self.individual_heaps = {}
+
+    def append(self, item: typing.Any, **kwargs):
+        node = OptimisedVertex(item, next(self._uuid))
+        if not self._index:
+            self._data.append(node)
+
+            # Add individual to heaps
+            self.individual_heaps[node.uuid] = []
+            for i, neighbour in enumerate(self._data):
+                # Skip the item itself
+                if i == len(self._data) - 1:
+                    break
+                # Add this neighbour to the node
+                dist = self.dist_func(node.item, neighbour.item)
+                heapq.heappush(self.individual_heaps[node.uuid],
+                               (dist, self._t + i, neighbour))  # uuid influences tie-breakers
+                # Add node to the neighbour
+                heapq.heappush(self.individual_heaps[neighbour.uuid],
+                               (dist, self._t + i, node))  # uuid influences tie-breakers
+                try:
+                    self.individual_comparisons[node][neighbour] = dist
+                except KeyError:
+                    self.individual_comparisons[node] = {neighbour: dist}
+            self._t += 1
+
+            if len(self) >= self.warm_up:
+                self._init_graph()
+                self._refine()
+                self._index = True
+            return
+
+        # A slot will be replaced, so let's update the search graph first
+        if len(self) == self.maxlen:
+            self._safe_node_removal()
+
+        # Assign the closest neighbors to the new item
+        neighbors, dists = self._search(node.item, self.graph_k)
+
+        # Add the new element to the buffer
+        self._data.append(node)
+        node.fill(neighbors, dists)
+        # The current neighbours have been updated
+        node.search_up_to_date = True
+        node._search_neighbours = neighbors
+        node._search_distributions = dists
+
+    def get_nn_for_all(self, k, epsilon: float = 0.1, return_distances=False):
+        """Get the nearest neighbours for all individuals in the graph"""
+        if len(self) < self.warm_up:
+            # Linear scan
+            if return_distances:
+                neighbours_p = [heapq.nsmallest(k, self.individual_heaps[item_id]) for item_id in range(len(self))]
+                nn = [[p[-1].item for p in np] for np in neighbours_p]
+                dists = [[p[0] for p in np] for np in neighbours_p]
+                return [(self[item_id].item, (nn[item_id], dists[item_id]))
+                        for item_id in range(len(self))]
+            else:
+                return [(self[item_id].item, [p[-1].item for p in heapq.nsmallest(k, self.individual_heaps[item_id])])
+                        for item_id in range(len(self))]
+        else:
+            return [(p.item, self._search(p.item, k, epsilon, seed=p, return_dists=return_distances)) for p in self]
+
+    def _linear_scan(self, item, k):
+        # Lazy search while the warm-up period is not finished
+        return super(OptimisedSWINN, self)._linear_scan(item, k)
+
+    def _search(self, item, k, epsilon: float = 0.1, seed=None, exclude=None, return_dists=True) -> tuple[list, list]:
+        # Search has already been performed and the seeds neighbours didn't change
+        if seed is not None and seed.search_up_to_date:
+            if return_dists:
+                return seed._search_neighbours[:k], seed._search_distributions[:k]
+            else:
+                return seed._search_neighbours[:k]
+
+        # Limiter for the distance bound
+        distance_scale = 1 + epsilon
+        # Distance threshold for early stops
+        distance_bound = math.inf
+
+        if exclude is None:
+            exclude = set()
+        else:
+            exclude = {exclude.uuid}
+
+        if seed is None:
+            # Make sure the starting point for the search is valid
+            while True:
+                # Random seed point to start the search
+                seed = self[self._rng.randint(0, len(self) - 1)]
+                if not seed.is_isolated() and seed.uuid not in exclude:
+                    break
+
+        # To avoid computing distances more than once for a given node
+        visited = {seed.uuid}
+        visited |= exclude
+
+        # Search pool is a minimum heap
+        pool = []
+
+        # Results are stored in a maximum heap
+        result = []
+
+        # c_dist, c_n = heapq.heappop(pool)
+        c_dist, c_n = 0, seed
+        while c_dist < distance_bound:
+            for n in c_n.all_neighbors():
+                if n.uuid in visited:
+                    continue
+
+                # TODO: added for individual_comparisons
+                try:
+                    comp = self.individual_comparisons[n]
+                except KeyError:
+                    comp = None
+
+                if c_n == seed:
+                    _, _, dist = seed.get_edge(n)
+                # TODO: assumption that seed.item is item in most searches, or a comparison with current node
+                #  has been made in the past for given neighbour
+                elif seed.item is item and seed.is_neighbor(n):
+                    _, _, dist = seed.get_edge(n)
+                elif comp is not None:
+                    try:
+                        dist = self.individual_comparisons[n][seed]
+                    except KeyError:
+                        dist = self.dist_func(item, n.item)
+                        self.individual_comparisons[n][seed] = dist
+                else:
+                    dist = self.dist_func(item, n.item)
+                    self.individual_comparisons[n] = {seed: dist}
+
+                if len(result) < k:
+                    heapq.heappush(result, (-dist, n))
+                    heapq.heappush(pool, (dist, n))
+                    distance_bound = distance_scale * -result[0][0]
+                elif dist < -result[0][0]:
+                    heapq.heapreplace(result, (-dist, n))
+                    heapq.heappush(pool, (dist, n))
+                    distance_bound = distance_scale * -result[0][0]
+                visited.add(n.uuid)
+            if len(pool) == 0:
+                break
+            c_dist, c_n = heapq.heappop(pool)
+
+        result.sort(reverse=True)
+        if return_dists:
+            neighbors, dists = map(list, zip(*((r[1], -r[0]) for r in result)))
+            # The current neighbours have been updated
+            if seed is not None:
+                seed.search_up_to_date = True
+                seed._search_neighbours = neighbors
+                seed._search_distributions = dists
+            return neighbors, dists
+        else:
+            neighbors = [r[1] for r in result]
+            # The current neighbours have been updated
+            if seed is not None:
+                seed.search_up_to_date = True
+                seed._search_neighbours = neighbors
+                seed._search_distributions = None
+            return neighbors
+
+    def _safe_node_removal(self):
+        """Remove the oldest data point from the search graph.
+
+        Make sure nodes are accessible from any given starting point after removing the oldest
+        node in the search graph. New traversal paths will be added in case the removed node was
+        the only bridge between its neighbors.
+
+        """
+        node = self._data.popleft()
+        # Get previous neighborhood info
+        rns = node.r_neighbors()[0]
+        ns = node.neighbors()[0]
+        node.farewell()
+        node.not_up_to_date()
+
+        ########### added
+        # Delete all comparisons of this node with others
+        for n in self.individual_comparisons[node]:
+            del self.individual_comparisons[n][node]
+        # Delete the nodes comparisons
+        del self.individual_comparisons[node]
+        ##########
+
+        # Nodes whose only direct neighbor was the removed node
+        rns = {rn for rn in rns if not rn.has_neighbors()}
+        # Nodes whose only reverse neighbor was the removed node
+        ns = {n for n in ns if not n.has_rneighbors()}
+
+        affected = list(rns | ns)
+        isolated = rns.intersection(ns)
+
+        # First we handle the unreachable nodes
+        for al in isolated:
+            neighbors, dists = self._search(al.item, self.graph_k)
+            al.fill(neighbors, dists)
+            al.search_up_to_date = True
+            al._search_neighbours = neighbors
+            al._search_distributions = dists
+
+        rns -= isolated
+        ns -= isolated
+        ns = tuple(ns)
+
+        # Nodes with no direct neighbors
+        for rn in rns:
+            seed = None
+            # Check the group of nodes without reverse neighborhood for seeds
+            # Thus we can join two separate groups
+            if len(ns) > 0:
+                seed = self._rng.choice(ns)
+
+            # Use the search index to create new connections
+            neighbors, dists = self._search(rn.item, self.graph_k, seed=seed, exclude=rn)
+            rn.fill(neighbors, dists)
+            rn.search_up_to_date = True
+            rn._search_neighbours = neighbors
+            rn._search_distributions = dists
+
+        self._refine(affected)  # TODO: with search
 
 
-class CSCLazySearch(neighbors.LazySearch):
-    def search(self, item: typing.Any, n_neighbors: int, return_indices=True, **kwargs):
-        """Find the `n_neighbors` closest points to `item`, along with their distances."""
-        # Compute the distances to each point in the window
-        # The window is (item, <extra>, distance)
-        points = ((i, *p, self.dist_func(item, p[0])) for i, p in enumerate(self.window))
+if __name__ == '__main__':
+    from scenario.job_hiring.features import ApplicantGenerator
 
-        closest = sorted(points, key=operator.itemgetter(-1))[:n_neighbors]
-        if return_indices:
-            return list(map(lambda c: c[0], closest))
+    sseed = 0
+    n = 500#0
+    n_max = 10000
 
-        # Return the k closest points
-        return tuple(map(list, zip(*closest)))
+    # rng = np.random.default_rng(seed=sseed)
+    # vertex_neighbours = {nn: 0 for nn in rng.choice(range(n_max), size=n)}
+    # vertex_neighbours2 = {nn: 0 for nn in rng.choice(range(n_max), size=n)}
+    #
+    # import cProfile
+    # with cProfile.Profile() as pr:
+    #     t0 = time.time()
+    #     for vertex in range(n_max):
+    #         is_neighbour = vertex in vertex_neighbours or vertex in vertex_neighbours2
+    #
+    #     t1 = time.time()
+    #     print("time old", t1 - t0)
+    #
+    #     pr.print_stats(SortKey.CUMULATIVE)
+    #
+    # with cProfile.Profile() as pr:
+    #     t0 = time.time()
+    #     for vertex in range(n_max):
+    #         is_neighbour = vertex_neighbours.get(vertex) or vertex_neighbours2.get(vertex)
+    #
+    #     t1 = time.time()
+    #     print("time new", t1 - t0)
+    #
+    #     pr.print_stats(SortKey.CUMULATIVE)
+    #
+    # exit()
+    # TODO
+
+    warm_up = 100  # 500
+    graph_k = 10
+    k = 5
+    epsilon = 0.1
+
+    print(f"seed={sseed}, num_samples={n}, warm-up={warm_up}, graph_k={graph_k}, k={k}, epsilon={epsilon}")
+
+    ag = ApplicantGenerator(seed=sseed, csv="../../scenario/job_hiring/data/belgian_population.csv")
+    population = ag.sample(n=n)
+
+    # nearest_neighbours_orig = SWINN(graph_k=graph_k, dist_func=FunctionWrapper(scipy.spatial.distance.braycurtis),
+    #                                 warm_up=warm_up, seed=sseed)
+    # import cProfile
+    # with cProfile.Profile() as pr:
+    #     t0 = time.time()
+    #     for t, p in enumerate(population):
+    #         individual = CombinedState(sample_context={}, sample_individual=p).to_array(individual_only=True)
+    #         action = int(individual[1])
+    #         nearest_neighbours_orig.append((individual, action))
+    #         #
+    #         nearest = nearest_neighbours_orig.get_nn_for_all(k=k, epsilon=epsilon)
+    #
+    #     t1 = time.time()
+    #     d1 = t1 - t0
+    #     print("time orig", d1)
+    #
+    #     pr.print_stats(SortKey.CUMULATIVE)
+
+    nearest_neighbours = OptimisedSWINN(graph_k=graph_k, dist_func=FunctionWrapper(scipy.spatial.distance.braycurtis),
+                                        warm_up=warm_up, seed=sseed)
+
+    import cProfile
+    with cProfile.Profile() as pr:
+        t0 = time.time()
+        for t, p in enumerate(population):
+            individual = CombinedState(sample_context={}, sample_individual=p).to_array(individual_only=True)
+            action = int(individual[1])
+            nearest_neighbours.append((individual, action))
+            #
+            nearest = nearest_neighbours.get_nn_for_all(k=k, epsilon=epsilon)
+
+        # old: -0.43920000000000003 new: -0.44839999999999997
+        # for n in nearest[:5]:
+        #     print(n)
+        #     break
+        n_actions = np.array([np.mean([n.item[1] for n in nn[1]]) for nn in nearest])  # TODO: extract item in method
+        actions = np.array([n[0][1] for n in nearest])
+        CON = - abs(actions - n_actions).mean()
+        print(CON)
+
+        t1 = time.time()
+        print("time new", t1 - t0)
+
+        pr.print_stats(SortKey.CUMULATIVE)
+

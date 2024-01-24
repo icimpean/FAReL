@@ -5,7 +5,7 @@ import types
 import numpy as np
 import pandas as pd
 from numpy.random import Generator
-from scipy.spatial.distance import minkowski, braycurtis
+from scipy.spatial.distance import minkowski
 
 
 class Feature(Enum):
@@ -180,7 +180,7 @@ class FeatureBias(object):
 
 class Scenario(object):
     """A scenario for generating data for a given setting"""
-    def __init__(self, features, nominal_features=(), numerical_features=(), seed=None):
+    def __init__(self, features, nominal_features=(), numerical_features=(), exclude_from_distance=(), seed=None):
         # The random generator for the scenario
         self.seed = seed
         self.rng = np.random.default_rng(seed=self.seed)
@@ -188,8 +188,21 @@ class Scenario(object):
         self.features = features
         self.nominal_features = nominal_features
         self.numerical_features = numerical_features
+        self.exclude_from_distance = exclude_from_distance
+        #
+        self.previous_state = None
+        #
+        self._goodness = None
+        self._rewards = None
+        #
+        self._features = None
         self._nom_indices = None
         self._num_indices = None
+        #
+        self._features_i = None
+        self._nom_indices_i = None
+        self._num_indices_i = None
+        self.indices_i = None
 
     def generate_sample(self):
         """Generate a sample"""
@@ -203,12 +216,30 @@ class Scenario(object):
         """Calculate the rewards for taking different actions in the current state, given the goodness score"""
         raise NotImplementedError
 
+    def init_features(self, state):
+        if self._features is None:
+            # Full state
+            self._features = state.sample_dict.keys()
+            self._nom_indices = [i for i, f in enumerate(self._features)
+                                 if (f in self.nominal_features) and (f not in self.exclude_from_distance)]
+            self._num_indices = [i for i, f in enumerate(self._features)
+                                 if (f in self.numerical_features) and (f not in self.exclude_from_distance)]
+            # Individual state
+            self._features_i = state.sample_individual.keys()
+            self._nom_indices_i = [i for i, f in enumerate(self._features_i)
+                                   if (f in self.nominal_features) and (f not in self.exclude_from_distance)]
+            self._num_indices_i = [i for i, f in enumerate(self._features_i)
+                                   if (f in self.numerical_features) and (f not in self.exclude_from_distance)]
+            self.indices_i = [i for i, f in enumerate(self._features_i)
+                              if f not in self.exclude_from_distance]
+
     def step(self, action):
         """Sample a state and return the rewards for corresponding actions in the scenario"""
-        state = self.generate_sample()
-        goodness = self.calc_goodness(state)
-        rewards = self.calculate_rewards(state, goodness)
-        return state, rewards
+        self.previous_state = self.generate_sample()
+        self._goodness = self.calc_goodness(self.previous_state)
+        self._rewards = self.calculate_rewards(self.previous_state, self._goodness)
+
+        return self.previous_state, self._rewards
 
     def create_dataset(self, num_samples, show_goodness=False, show_rewards=False, rounding=None):
         """Generate a dataset with the given number of samples."""
@@ -241,58 +272,98 @@ class Scenario(object):
 
     def similarity_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                           distance="HMOM", alpha=1.0, exp=True):
-        if isinstance(distance, types.FunctionType):
-            # noinspection PyCallingNonCallable
+        try:
             return distance(state1, state2)
-        elif distance.startswith("H") and distance.endswith("OM"):
-            return self.H_OM_distance(state1, state2, distance, alpha, exp)
-        # Minkowski distance between two 1-D arrays (minkowski)
-        elif distance == "minkowski":
-            d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
-            return d
-        elif distance == "braycurtis":
-            d = self.braycurtis_metric(state1, state2, w=None)  # TODO: absract w together with consistency score
-            return d
-        else:
-            raise ValueError(f"Expected one of [HEOM, HMOM, minkowski, braycurtis]. Got: {distance}")
+        except TypeError:
+            if distance.startswith("H") and distance.endswith("OM"):
+                return self.H_OM_distance(state1, state2, distance, alpha, exp)
+            # Minkowski distance between two 1-D arrays (minkowski)
+            elif distance == "minkowski":
+                d = self.minkowski_metric(state1, state2, p=2, w=None)  # TODO: absract p, w together with consistency score
+                return d
+            elif distance == "braycurtis":
+                d = self.braycurtis_metric(state1, state2, w=None)  # TODO: absract w together with consistency score
+                return d
+            else:
+                raise ValueError(f"Expected one of [HEOM, HMOM, minkowski, braycurtis]. Got: {distance}")
 
     def H_OM_distance(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                       distance="HMOM", alpha=1.0, exp=True):
-        num1 = self._normalise_features(state1, indices=self._num_indices)  # Only returns features
-        nom1 = self._normalise_features(state1, indices=self._nom_indices)  # Only returns features
-        num2 = self._normalise_features(state2, indices=self._num_indices)  # Only returns features
-        nom2 = self._normalise_features(state2, indices=self._nom_indices)  # Only returns features
+        try:
+            # Extract features corresponding to given indices
+            num1 = state1[self._num_indices_i]
+            nom1 = state1[self._nom_indices_i]
+            num2 = state2[self._num_indices_i]
+            nom2 = state2[self._nom_indices_i]
+        except KeyError:
+            norm_state1 = self._normalise_features(state1)
+            norm_state2 = self._normalise_features(state2)
+            num1 = norm_state1[self._num_indices]
+            nom1 = norm_state1[self._nom_indices]
+            num2 = norm_state2[self._num_indices]
+            nom2 = norm_state2[self._nom_indices]
+
         # Heterogeneous Euclidean-Overlap Metric (HEOM)
         if distance == 'HEOM':
-            d = np.sum(np.abs(num1 - num2)) + np.sum(nom1 != nom2)
+            # d = np.sum(np.abs(num1 - num2)) + np.sum(nom1 != nom2)
+            d = sum(np.abs(num1 - num2)) + sum(nom1 != nom2)
         # Heterogeneous Manhattan-Overlap Metric (HMOM)
         elif distance == 'HMOM':
-            d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
+            # d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
+            diff = (num1 - num2)
+            d = sum(diff * diff) + sum(nom1 != nom2)
         else:
             raise ValueError(f"Expected distance: HEOM or HMOM. Got: {distance}")
         return np.exp(-alpha * d) if exp else d
 
     def minkowski_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                          p=2, w=None):
-        norm1, norm2 = self.state_to_array(state1), self.state_to_array(state2)
+        # Normalise if it hasn't happened yet
+        if isinstance(state1, CombinedState):
+            norm1 = self._normalise_features(state1, indices=self.indices_i)
+            norm2 = self._normalise_features(state2, indices=self.indices_i)
+        else:
+            norm1 = state1[self.indices_i]
+            norm2 = state2[self.indices_i]
         return minkowski(norm1, norm2, p=p, w=w)
 
     def braycurtis_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                           w=None):
-        norm1, norm2 = self.state_to_array(state1), self.state_to_array(state2)
-        return braycurtis(norm1, norm2, w=w)
+        # Normalise if it hasn't happened yet
+        # if isinstance(state1, CombinedState):
+        #     norm1 = self._normalise_features(state1, indices=self.indices_i)
+        #     norm2 = self._normalise_features(state2, indices=self.indices_i)
+        # else:
+        #     norm1 = state1[self.indices_i]
+        #     norm2 = state2[self.indices_i]
+        try:
+            norm1 = state1[self.indices_i]
+            norm2 = state2[self.indices_i]
+        except KeyError:
+            norm1 = self._normalise_features(state1, indices=self.indices_i)
+            norm2 = self._normalise_features(state2, indices=self.indices_i)
+
+        # Based on from scipy.spatial.distance.braycurtis
+        l1_diff = abs(norm1 - norm2)
+        l1_sum = abs(norm1 + norm2)
+        if w is not None:
+            l1_diff = w * l1_diff
+            l1_sum = w * l1_sum
+
+        return sum(l1_diff) / sum(l1_sum)
 
     def _normalise_features(self, state: Union[CombinedState, np.ndarray], features: List[Feature] = None,
                             indices=None):
         raise NotImplementedError
 
     def state_to_array(self, state: Union[CombinedState, np.ndarray]):
+        """Used by history to store individuals"""
         # If state is an array, assume it is preprocessed as needed
         s = state
         if isinstance(state, CombinedState):
-            s = np.concatenate([self._normalise_features(state, self.numerical_features),
-                                state.get_features(self.nominal_features, as_array=True)])
+            s = self._normalise_features(state, self._features_i)
         return s
 
-    def get_individual(self, state: CombinedState, normalise=True):
+    def normalise_state(self, state: CombinedState):
+        """Used by the RL agent interacting with the environment"""
         raise NotImplementedError

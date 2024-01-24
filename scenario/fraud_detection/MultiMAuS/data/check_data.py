@@ -11,9 +11,12 @@ FOLDER_REAL_DATA_ANALYSIS = join(FOLDER_REAL_DATA, 'analysis')
 FOLDER_SIMULATOR_LOG = join(pardir, 'experiments/results')
 
 # create the above folders if they don't exist yet
-for folder in [FOLDER_REAL_DATA, FOLDER_SIMULATOR_INPUT, FOLDER_SIMULATOR_LOG, FOLDER_REAL_DATA_ANALYSIS]:
-    if not exists(folder):
-        makedirs(folder)
+###########################################
+# Uncommented as we don't use it in the fairness framework
+# for folder in [FOLDER_REAL_DATA, FOLDER_SIMULATOR_INPUT, FOLDER_SIMULATOR_LOG, FOLDER_REAL_DATA_ANALYSIS]:
+#     if not exists(folder):
+#         makedirs(folder)
+###########################################
 
 FILE_ANONYMIZED_DATASET = join(FOLDER_REAL_DATA, 'anonymized_dataset.csv')
 FILE_REAL_LOG = join(FOLDER_REAL_DATA, 'transaction_log.csv')

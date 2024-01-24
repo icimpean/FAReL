@@ -28,15 +28,16 @@ class FraudFeature(Feature):
     currency = auto()
 
 
+ALL_FRAUD_FEATURES = [f for f in FraudFeature]
 NUM_FRAUD_FEATURES = len(FraudFeature)
 context_features = [FraudFeature.satisfaction, FraudFeature.fraud_percentage]
 individual_features = [f for f in FraudFeature if f not in context_features]
 
 
 class TransactionModelMDP(Scenario):
-    def __init__(self, transaction_model, do_reward_shaping=False, num_transactions=None):
+    def __init__(self, transaction_model, do_reward_shaping=False, num_transactions=None,
+                 reward_biases=[], exclude_from_distance=()):
         # Super call
-        self._features = None
         features = [feature for feature in FraudFeature]
         nominal_features = [FraudFeature.card_id, FraudFeature.merchant_id, FraudFeature.country,
                             FraudFeature.continent, FraudFeature.currency]
@@ -45,11 +46,13 @@ class TransactionModelMDP(Scenario):
             FraudFeature.month, FraudFeature.day, FraudFeature.weekday, FraudFeature.hour, FraudFeature.amount]
         super(TransactionModelMDP, self).__init__(features=features, nominal_features=nominal_features,
                                                   numerical_features=numerical_features,
-                                                  seed=transaction_model.parameters["seed"])
+                                                  seed=transaction_model.parameters["seed"],
+                                                  exclude_from_distance=exclude_from_distance)
         #
         self.transaction_model = transaction_model
         self.do_reward_shaping = do_reward_shaping
         self.num_transactions = num_transactions
+        self.reward_biases = reward_biases
         self._params = self.transaction_model.parameters
         self.input_shape = NUM_FRAUD_FEATURES
         self.actions = [a for a in FraudActions]
@@ -171,6 +174,8 @@ class TransactionModelMDP(Scenario):
         self.customer = self._get_customer()
         self.state = self.full_state(self.customer, self.transaction_model)
         self.previous_state = None
+        # Initialise features
+        self.init_features(self.state)
         return self.state
 
     def step(self, action):
@@ -210,22 +215,17 @@ class TransactionModelMDP(Scenario):
             reward += customer.fraudster * (-customer.curr_amount)
             reward += (1 - customer.fraudster) * (0.003 * customer.curr_amount + 0.01)
 
-        # FROM MultiMAuS: do some reward shaping: reward success after one authentication
-        # if self.do_reward_shaping:
-        #     if reward > 0:  # transaction was successful
-        #         if action == 0:
-        #             reward += 0.2
-        # if self.do_reward_shaping:  # TODO
-        #     if reward > 0:
-        #         reward = 1
-        #     else:
-        #         reward = -1  # negative initial reward means lost amount ==> fraud
-        if self.do_reward_shaping:  # TODO
+        # Do some reward shaping: reward success after one authentication
+        if self.do_reward_shaping:
             if reward > 0:
                 reward = 1
             elif reward < 0:
                 reward = -1  # negative initial reward means lost amount ==> fraud
             # else: reward = 0
+
+        # Add bias
+        for bias in self.reward_biases:
+            self.reward += bias.get_bias(self.state)
 
         if customer.fraudster:
             self.transaction_model.fraudulent_transactions += 1
@@ -249,23 +249,22 @@ class TransactionModelMDP(Scenario):
 
     def _normalise_features(self, state: Union[CombinedState, np.ndarray], features: List[FraudFeature] = None,
                             indices=None):
-        if features is None:
-            features = [f for f in FraudFeature]
         if isinstance(state, CombinedState):
-            new_values = self.normalise_state(state)
-            new_values = np.array([v for f, v in zip(features, new_values) if f in individual_features])
-        else:
-            # Already transformed into array, return requested features
-            if indices:
-                new_values = state[indices]
+            if features is None:
+                new_values = self.normalise_state(state)
             else:
-                new_values = np.array([state[i] for i, f in enumerate(self._features) if f in features])
+                new_values = self.normalise_state(state, individual_only=True)
+        else:
+            new_values = state
+        # Already transformed into array, return requested indices
+        if indices:
+            new_values = new_values[indices]
         return new_values
 
     def _get_max_norm(self, parameter):
         return max(1, self._params[parameter].shape[0] - 1)
 
-    def normalise_state(self, state):
+    def normalise_state(self, state, individual_only=False):
         """Normalise based on MultiMAuS transaction model and its parameters:
 
         ``The transaction amounts range from about 0.5 to 7,800 Euro (after converting everything to the same
@@ -273,31 +272,32 @@ class TransactionModelMDP(Scenario):
         5 (3) different currencies. There are a total of 7 merchants...``
         """
         sat, fraud_per, month, day, weekday, hour, card_id, merchant_id, country, continent, amount, currency = state.to_array()
-        norm_array = np.array([
-            sat,
-            fraud_per,
-            month / self.maxima["frac_month"],
-            day / self.maxima["frac_monthday"],
-            weekday / self.maxima["frac_weekday"],
-            hour / self.maxima["frac_hour"],
-            card_id / self.maxima["card_id"],
-            merchant_id / self.maxima["merchant_id"],
-            country / self.maxima["country_frac"],
-            continent / self.maxima["continent"],
-            amount / self.maxima["amount"],
-            currency / self.maxima["currency"],
-        ])
-        if self._nom_indices is None:
-            self._features = [f for f in FraudFeature]
-            self._nom_indices = [i for i, f in enumerate([g for g in self._features if g in individual_features]) if
-                                 f in self.nominal_features]
-            self._num_indices = [i for i, f in enumerate([g for g in self._features if g in individual_features]) if
-                                 f in self.numerical_features]
-        return norm_array
-
-    def get_individual(self, state: CombinedState, normalise=True):
-        if normalise:
-            return self._normalise_features(state, individual_features)
+        if individual_only:
+            norm_array = np.array([
+                month / self.maxima["frac_month"],
+                day / self.maxima["frac_monthday"],
+                weekday / self.maxima["frac_weekday"],
+                hour / self.maxima["frac_hour"],
+                card_id / self.maxima["card_id"],
+                merchant_id / self.maxima["merchant_id"],
+                country / self.maxima["country_frac"],
+                continent / self.maxima["continent"],
+                amount / self.maxima["amount"],
+                currency / self.maxima["currency"],
+            ])
         else:
-            individual = {f: state[f] for f in individual_features}
-        return individual
+            norm_array = np.array([
+                sat,
+                fraud_per,
+                month / self.maxima["frac_month"],
+                day / self.maxima["frac_monthday"],
+                weekday / self.maxima["frac_weekday"],
+                hour / self.maxima["frac_hour"],
+                card_id / self.maxima["card_id"],
+                merchant_id / self.maxima["merchant_id"],
+                country / self.maxima["country_frac"],
+                continent / self.maxima["continent"],
+                amount / self.maxima["amount"],
+                currency / self.maxima["currency"],
+            ])
+        return norm_array

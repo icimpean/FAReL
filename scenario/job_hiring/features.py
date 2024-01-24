@@ -136,12 +136,20 @@ class ApplicantGenerator(object):
                  csv="data/belgian_population.csv",
                  seed=None):
         self.df = pd.read_csv(csv, index_col=None) if csv is not None else None
+        # Split off the weight column
+        self._df_w = self.df["w"].copy()
+        self.df.drop(columns=["w"], inplace=True)
+        self.df_index = self.df.index
+        #
         self.seed = seed
         self.rng = np.random.default_rng(seed=self.seed)
         # Not all features are included in dataframe
         self.features = [HiringFeature.nationality, HiringFeature.age, HiringFeature.gender, HiringFeature.degree,
                          HiringFeature.extra_degree, HiringFeature.married]
         self.df_features = [f.name for f in self.features]
+        self._extract_feature_order = [HiringFeature.age, HiringFeature.gender, HiringFeature.degree,
+                                       HiringFeature.extra_degree, HiringFeature.nationality, HiringFeature.married]
+        self._features_extract = [f.name for f in self._extract_feature_order]
 
     @staticmethod
     def _extract_features(row, features):
@@ -159,9 +167,9 @@ class ApplicantGenerator(object):
 
     def _sample(self, n=1):
         """Sample dataframe"""
-        indices = self.rng.choice(self.df.index, size=n, replace=True, p=self.df["w"])
+        indices = self.rng.choice(self.df_index, size=n, replace=True, p=self._df_w)
         samples_df = self.df.iloc[indices]
-        return samples_df.drop(columns=["w"])
+        return samples_df
 
     def sample(self, n=1):
         """Sample the given number of applicants"""
@@ -169,9 +177,7 @@ class ApplicantGenerator(object):
 
         applicants = []
         for _, row in samples_df.iterrows():
-            applicant = self._extract_features(row, [HiringFeature.age, HiringFeature.gender,
-                                                     HiringFeature.degree, HiringFeature.extra_degree,
-                                                     HiringFeature.nationality, HiringFeature.married])
+            applicant = {g: row[f] for f, g in zip(self._features_extract, self._extract_feature_order)}
             # Add experience
             applicant, degree_idx = self._add_experience(applicant)
             # Add languages
@@ -206,37 +212,43 @@ class ApplicantGenerator(object):
     def _generate_languages(self, degree_idx):
         # Speaks no foreign languages
         if self.rng.binomial(n=1, p=NO_LANGUAGE_FOR_DEGREES[degree_idx]) == 1:
-            languages = [self.rng.choice((Language.dutch, Language.french))]
+            languages = [(Language.dutch, Language.french)[self.rng.integers(2)]]
         # Speaks a foreign language
         else:
             total_lang = range(1, 5)
             n_for_lang = self.rng.choice(total_lang, p=N_LANGUAGE_FOR_DEGREES[degree_idx])
-            languages = self.rng.choice((Language.dutch, Language.french, Language.english, Language.german),
-                                        p=FOREIGN_LANGUAGE_FOR_DEGREES[degree_idx],
+            languages = self.rng.choice(ALL_LANGUAGES, p=FOREIGN_LANGUAGE_FOR_DEGREES[degree_idx],
                                         size=n_for_lang, replace=False).tolist()
             # Current language is not present in foreign languages
             if (Language.dutch not in languages) and (Language.french not in languages):
-                languages.append(self.rng.choice((Language.dutch, Language.french)))
+                languages.append((Language.dutch, Language.french)[self.rng.integers(2)])
+
         return languages
 
     @staticmethod
     def normalise_feature(feature: HiringFeature, value):
         if feature == HiringFeature.gender:
-            return value.value / len(Gender) if isinstance(value, Gender) else value
+            return value.value / (len(Gender) - 1) if isinstance(value, Gender) else value
         elif feature == HiringFeature.nationality:
-            return value.value / len(Nationality) if isinstance(value, Nationality) else value
+            return value.value / (len(Nationality) - 1) if isinstance(value, Nationality) else value
         elif feature == HiringFeature.age:
-            return value / (65 - 18)
+            return (value - 18) / (65 - 18)
         elif feature == HiringFeature.experience:
             return value / (65 - 18)
         else:
             return value
 
-    def normalise_features(self, applicant, features: List[HiringFeature] = None):
+    def normalise_features(self, applicant, features: List[HiringFeature] = None, to_array=False):
         if features is not None:
-            new_values = {f: self.normalise_feature(f, applicant[f]) for f in features}
+            if to_array:
+                new_values = np.array([self.normalise_feature(f, applicant[f]) for f in features])
+            else:
+                new_values = {f: self.normalise_feature(f, applicant[f]) for f in features}
         else:
-            new_values = {f: self.normalise_feature(f, v) for f, v in applicant.items()}
+            if to_array:
+                new_values = np.array([self.normalise_feature(f, v) for f, v in applicant.items()])
+            else:
+                new_values = {f: self.normalise_feature(f, v) for f, v in applicant.items()}
         return new_values
 
     def fit_model(self, path, feature_dist):
@@ -251,6 +263,7 @@ class ApplicantGenerator(object):
 
         """
         new_df = self.df.copy()
+        new_df["w"] = self._df_w
 
         # Single feature
         is_single = False
@@ -287,10 +300,16 @@ class ApplicantGenerator(object):
 
         self.df = new_df
         self.df.to_csv(path, index=False)
+        # Split off the weight column
+        self._df_w = self.df["w"].copy()
+        self.df.drop(columns=["w"], inplace=True)
 
     def load_model(self, path):
         """Load model from given path"""
         self.df = pd.read_csv(path, index_col=None)
+        # Split off the weight column
+        self._df_w = self.df["w"].copy()
+        self.df.drop(columns=["w"], inplace=True)
 
     def print_model(self):
         # Per feature

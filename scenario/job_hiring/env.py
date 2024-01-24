@@ -54,6 +54,7 @@ class JobHiringEnv(Scenario):
         noise_hire: (Optional) Noise added to reward for hiring and rejecting a candidate.
         goodness_biases: (Optional) Bias added to goodness score when certain feature values are encountered.
         reward_biases: (Optional) Bias added to the reward when certain feature values are encountered.
+        exclude_from_distance: (Optional) The features to exclude from distance calculations between individuals
     """
 
     def __init__(self, team_size=None, seed=None, description=None, applicant_generator=None,
@@ -61,15 +62,16 @@ class JobHiringEnv(Scenario):
                  episode_length=None,
                  diversity_weight=DIVERSITY_WEIGHT, hiring_threshold=HIRING_THRESHOLD,
                  goodness_noise=GOODNESS_NOISE, noise_hire=NOISE_HIRE,
-                 goodness_biases=None, reward_biases=None):
+                 goodness_biases=None, reward_biases=None,
+                 exclude_from_distance=()):
         # Super call
-        self._features = None
         features = [feature for feature in HiringFeature]
         nominal_features = [HiringFeature.gender, HiringFeature.married,
                             HiringFeature.nationality, *LANGUAGE_FEATURES]
         numerical_features = [f for f in features if f not in nominal_features]
         super(JobHiringEnv, self).__init__(features=features, nominal_features=nominal_features,
-                                           numerical_features=numerical_features, seed=seed)
+                                           numerical_features=numerical_features,
+                                           exclude_from_distance=exclude_from_distance, seed=seed)
         #
         if team_size and episode_length:
             assert episode_length >= team_size, \
@@ -103,6 +105,9 @@ class JobHiringEnv(Scenario):
         self._team_start_t = []
         self._company_state = self._default_company_state()
         self._company_entropies = self._default_company_entropy()
+        #
+        self._goodness = None
+        self._rewards = None
         # reject/hire
         self.actions = [a for a in HiringActions]
 
@@ -141,13 +146,15 @@ class JobHiringEnv(Scenario):
         self._company_state = self._default_company_state()
         self._company_entropies = self._default_company_entropy()
         self.previous_state = self.generate_sample()
+        self._goodness = self.calc_goodness(self.previous_state)
+        self._rewards = self.calculate_rewards(self.previous_state, self._goodness)
+        # Initialise features
+        self.init_features(self.previous_state)
         return self.previous_state
 
     def step(self, action):
-        goodness = self.calc_goodness(self.previous_state)
-        rewards = self.calculate_rewards(self.previous_state, goodness)
         hiring_action = HiringActions(action)
-        reward = rewards[hiring_action]
+        reward = self._rewards[hiring_action]
 
         if hiring_action == HiringActions.hire:
             self.employees.append(self.new_employee(self.previous_state))
@@ -164,6 +171,8 @@ class JobHiringEnv(Scenario):
 
         next_state = self.generate_sample()
         self.previous_state = next_state
+        self._goodness = self.calc_goodness(self.previous_state)
+        self._rewards = self.calculate_rewards(self.previous_state, self._goodness)
         self._t += 1
 
         done = False
@@ -173,7 +182,7 @@ class JobHiringEnv(Scenario):
         # The maximum team size has been reached
         elif self.team_size is not None and self._current_team_size >= self.team_size:
             done = True
-        info = {"goodness": goodness, "true_action": 1 if goodness >= self.hiring_threshold else 0,
+        info = {"goodness": self._goodness, "true_action": 1 if self._goodness >= self.hiring_threshold else 0,
                 "team_size": self._current_team_size}
 
         return next_state, reward, done, info
@@ -384,31 +393,15 @@ class JobHiringEnv(Scenario):
     def _normalise_features(self, state: Union[CombinedState, np.ndarray], features: List[HiringFeature] = None,
                             indices=None):
         if isinstance(state, CombinedState):
-            new_values = self.applicant_generator.normalise_features(state.sample_dict, features)
-            new_values = np.array([new_values[f] for f in new_values])
+            new_values = self.applicant_generator.normalise_features(state.sample_dict, features, to_array=True)
         else:
-            # Already transformed into array, return requested features
-            if indices:
-                new_values = state[indices]
-            else:
-                new_values = np.array([state[i] for i, f in enumerate([g for g in self._features if g not in CompanyFeature]) if f in features])
+            new_values = state
+        # Already transformed into array, return requested indices
+        if indices:
+            new_values = new_values[indices]
         return new_values
 
     def normalise_state(self, state: CombinedState):
-        values, features = state.to_array(return_features=True)
         norm_array = np.array([self.applicant_generator.normalise_feature(feature, value)
-                               if feature not in self.company_features else value
-                               for feature, value in zip(features, values)])
-        if self._nom_indices is None:
-            self._features = features
-            self._nom_indices = [i for i, f in enumerate([g for g in self._features if g not in CompanyFeature]) if
-                                 f in self.nominal_features]
-            self._num_indices = [i for i, f in enumerate([g for g in self._features if g not in CompanyFeature]) if
-                                 f in self.numerical_features]
+                               for feature, value in state.sample_dict.items()])
         return norm_array
-
-    def get_individual(self, state: CombinedState, normalise=True):
-        if normalise:
-            return self._normalise_features(state, [f for f in HiringFeature])
-        else:
-            return state.sample_individual
