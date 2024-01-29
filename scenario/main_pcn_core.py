@@ -497,6 +497,7 @@ if __name__ == '__main__':
                              'IndividualFairness (5), ConsistencyScoreComplement (6),'
                              'ConsistencyScoreComplement_INN (7)')
     parser.add_argument('--single_objective', default=-1, type=int, help="Use a single objective to train on")
+    parser.add_argument('--compute_individual', action='store_true', help='Compute individual fairness, regardless of the objectives given for PCN')
     parser.add_argument('--env', default='job', type=str, help='job or fraud')
     parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
     parser.add_argument('--steps', default=1e5, type=float, help='total timesteps')
@@ -575,10 +576,12 @@ if __name__ == '__main__':
     # #
     # args.objectives = [0, 5, 5, 5]  # TODO
     # # args.objectives = [0, 6, 6, 6]  # TODO
-    # args.distance_metrics = ["braycurtis", "HMOM", "HEOM"]
-    # args.bias = 1
-    # args.ignore_sensitive = True  # TODO
-    # args.log_compact = True
+    # args.objectives = [0]
+    # args.distance_metrics = ["HMOM"]#, "HEOM"]
+    # # args.bias = 1
+    # # args.ignore_sensitive = True  # TODO
+    # # # args.log_compact = True
+    # args.compute_individual = True
 
     print(args)
 
@@ -746,6 +749,9 @@ if __name__ == '__main__':
     all_individual_notions = [_ind_notions_mapping[o] for o in args.objectives if o >= 5]
     if args.no_individual:
         all_individual_notions = []
+    elif args.compute_individual:  # TODO: ConsistencyScoreComplement_INN
+        all_individual_notions = [IndividualNotion.IndividualFairness, IndividualNotion.ConsistencyScoreComplement]
+        args.distance_metrics = args.distance_metrics[:1] * 2
     # TODO: individual fairness notion are calculated as requested: o > 5 will be given an index -1?
     elif 5 not in args.objectives:
         # Only #7
