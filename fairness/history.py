@@ -26,6 +26,7 @@ class History(object):
         self.store_state_array = store_state_array
         self.CM = ConfusionMatrix(self.env_actions)
         self.t = 0
+        self.features = None
 
     def update(self, episode, t, state, action, true_action, score, reward,
                sensitive_attributes: List[SensitiveAttribute]):

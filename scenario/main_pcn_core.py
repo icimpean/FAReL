@@ -481,12 +481,10 @@ def train_fair(env,
             eval_logger.write_data(entries)
 
         update_num += 1
+        # return  # TODO
 
 
 if __name__ == '__main__':
-    # import gym_covid
-    # print(torch.cuda.is_available())
-    # import objgraph
     import time
     t_start = time.time()
 
@@ -561,27 +559,29 @@ if __name__ == '__main__':
     # ########
     # args.vsc = 0
     # #
-    # args.steps = 100000
-    # args.window = 1000
+    # args.steps = 3000  # TODO
+    # args.window = 500
     # args.team_size = 100
     # args.episode_length = args.team_size * 10
     # # args.env = "fraud"
     # # args.n_transactions = 500
     # # args.fraud_proportion = 0.20
-    # #
+    # # #
     # args.top_episodes = 5  # TODO
     # args.n_episodes = 5
     # args.er_size = 20
     # args.model_updates = 10
-    # #
-    # args.objectives = [0, 5, 5, 5]  # TODO
-    # # args.objectives = [0, 6, 6, 6]  # TODO
-    # args.objectives = [0]
-    # args.distance_metrics = ["HMOM"]#, "HEOM"]
-    # # args.bias = 1
-    # # args.ignore_sensitive = True  # TODO
-    # # # args.log_compact = True
-    # args.compute_individual = True
+    # # #
+    # # args.objectives = [0, 5, 5, 5]  # TODO
+    # # # args.objectives = [0, 6, 6, 6]  # TODO
+    # args.objectives = [0, 1, 2, 7]
+    # args.distance_metrics = ["HMOM"]# * 3#, "HMOM"]#, "HEOM"]
+    # # # args.bias = 1
+    # args.ignore_sensitive = True  # TODO
+    # # # # args.log_compact = True
+    # # args.compute_individual = True
+    # args.combined_sensitive_attributes = 0
+    # args.log_dir = f"knn_graph{args.combined_sensitive_attributes}"
 
     print(args)
 
@@ -789,6 +789,8 @@ if __name__ == '__main__':
     ref_point = np.array([-max_reward] + [-episode_length] * _num_notions)
     scaling_factor = torch.tensor([[1.0] + ([1] * _num_notions) + [0.1]]).to(device)
     max_return = np.array([max_reward] + [0] * _num_notions) / scale
+
+    print(_num_notions)
 
     input_shape = env.input_shape
     actions = env.actions

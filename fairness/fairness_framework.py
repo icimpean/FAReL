@@ -132,6 +132,7 @@ class ExtendedfMDP(object):
     def reset(self):
         self._t += 1
         self._episode += 1
+        self.fairness_framework.history.features = self.env._features_i
         return self.env.reset()
 
     def step(self, action, scores=None):

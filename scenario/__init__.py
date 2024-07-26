@@ -5,6 +5,7 @@ import types
 import numpy as np
 import pandas as pd
 from numpy.random import Generator
+from scipy.linalg import norm
 from scipy.spatial.distance import minkowski
 
 
@@ -319,13 +320,36 @@ class Scenario(object):
     def minkowski_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                          p=2, w=None):
         # Normalise if it hasn't happened yet
-        if isinstance(state1, CombinedState):
-            norm1 = self._normalise_features(state1, indices=self.indices_i)
-            norm2 = self._normalise_features(state2, indices=self.indices_i)
-        else:
+        # if isinstance(state1, CombinedState):
+        #     norm1 = self._normalise_features(state1, indices=self.indices_i)
+        #     norm2 = self._normalise_features(state2, indices=self.indices_i)
+        # else:
+        #     norm1 = state1[self.indices_i]
+        #     norm2 = state2[self.indices_i]
+        # return minkowski(norm1, norm2, p=p, w=w)
+        try:
             norm1 = state1[self.indices_i]
             norm2 = state2[self.indices_i]
-        return minkowski(norm1, norm2, p=p, w=w)
+        except KeyError:
+            norm1 = self._normalise_features(state1, indices=self.indices_i)
+            norm2 = self._normalise_features(state2, indices=self.indices_i)
+        # Based on from scipy.spatial.distance.minkowski
+        if p <= 0:
+            raise ValueError("p must be greater than 0")
+        u_v = norm1 - norm2
+        if w is not None:
+            if p == 1:
+                root_w = w
+            elif p == 2:
+                # better precision and speed
+                root_w = np.sqrt(w)
+            elif p == np.inf:
+                root_w = (w != 0)
+            else:
+                root_w = np.power(w, 1 / p)
+            u_v = root_w * u_v
+        dist = norm(u_v, ord=p)
+        return dist
 
     def braycurtis_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                           w=None):
