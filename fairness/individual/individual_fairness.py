@@ -1,25 +1,18 @@
 from __future__ import annotations
 
-import heapq
-import math
-import time
-import typing
 from collections import deque
 from enum import Enum
 from itertools import groupby
 from multiprocessing import Pool
-from pstats import SortKey
 
 import numpy as np
 import scipy.spatial.distance
-from river import neighbors
-from river.neighbors.ann.nn_vertex import Vertex
-from river.neighbors.base import FunctionWrapper, DistanceFunc
+from river.neighbors.base import FunctionWrapper
 
 from fairness.history import History, DiscountedHistory
 from fairness.individual import IndividualNotion, IndividualFairnessBase
+from fairness.individual.individual_deque import IndividualDeque
 from fairness.individual.swinn.optimised_swinn import OptimisedSWINN
-from scenario import CombinedState
 
 
 def dict_to_array(d):
@@ -127,7 +120,6 @@ class IndividualFairness(IndividualFairnessBase):
         self._individual_total = {d: 0.0 for d in all_metrics}
         self._last_ind = {d: [] for d in all_metrics}
         #
-        # self._csc_nbrs = {d: None for d in self.csc_distance_metrics}
         self._neighbours = None
         self.inn_sensitive_features = inn_sensitive_features
         self.seed = seed
@@ -168,13 +160,11 @@ class IndividualFairness(IndividualFairnessBase):
 
         # If given n interactions/individuals, under the assumption that all interactions until n have been compared in
         #   the previous timestep, only individual n should be compared to 0 until n - 1
-        map_i_j = []
         i = n - 1
-        for j in range((n - 1) - 1, lowest_n - 1, -1):  # Run range(lowest_n, n - 1) backwards for is_discounted
-            map_i_j.append((i, j, states[i], states[j], scores[i], scores[j],
-                            similarity_metric, alpha, metric, num_actions))
-        unsatisfied_pairs = 0
+        map_i_j = [(i, j, states[i], states[j], scores[i], scores[j], similarity_metric, alpha, metric, num_actions)
+                   for j in range((n - 1) - 1, lowest_n - 1, -1)]
         results = [_pool_individual_fairness(ij) for ij in map_i_j]
+        unsatisfied_pairs = 0
 
         if with_window or is_discounted:
             # Store data at individual with lowest index: comparison gets removed with individual when moving out
@@ -182,8 +172,8 @@ class IndividualFairness(IndividualFairnessBase):
             if len(self._individual_last_window[distance_metric]) == history.window:
                 last, _ = self._individual_last_window[distance_metric][0]
                 self._individual_total[distance_metric] -= np.nansum(last)
-            self._individual_last_window[distance_metric].append(
-                ([], deque(maxlen=history.window)))  # diffs, deque/heap
+            # diffs, deque/heap
+            self._individual_last_window[distance_metric].append(([], IndividualDeque(max_n=5, window=history.window)))
 
         # Windowed + full history
         if not is_discounted:
@@ -381,11 +371,12 @@ class IndividualFairness(IndividualFairnessBase):
         else:
             # Use distances already calculated and stored from individual fairness notion
             #   (d, j, diff, actions[i], actions[j])
-            nearest = [heapq.nsmallest(min(n, 5), deq) for _, deq in self._individual_last_window[distance_metric]]
-            n_actions = [np.mean([n[-2] for n in nn]) for nn in nearest]
-            actions = [[n[-1] for n in nn] for nn in nearest]
-            n_actions = np.array(n_actions)
-            actions = np.array([a[0] for a in actions])
+            nearest = [deq.n_smallest for _, deq in self._individual_last_window[distance_metric]]
+            try:
+                n_actions = np.mean([[n[-2] for n in nn] for nn in nearest], axis=1)
+            except ValueError:
+                n_actions = [np.mean([n[-2] for n in nn]) for nn in nearest]
+            actions = np.array([nn[0][-1] for nn in nearest])
 
             # compute consistency score
             CON = - abs(actions - n_actions).mean()
@@ -451,14 +442,15 @@ class IndividualFairness(IndividualFairnessBase):
             if self.inn_sensitive_features is None:
                 # Retrieve nearest neighbours (item, nn, dists)
                 nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1, return_distances=False, return_as_array=True)
-                n_actions = np.array([np.mean([n[1] for n in nn[1]]) for nn in nearest])
+                n_actions = np.mean([[n[1] for n in nn[1]] for nn in nearest], axis=1)
                 actions = np.array([n[0][1] for n in nearest])
+
             else:
                 n_actions = []
                 actions = []
                 for sf, nbrs in self._neighbours.items():
                     nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1)
-                    na = np.array([np.mean([n[1] for n in nn[1]]) for nn in nearest])
+                    na = np.mean([[n[1] for n in nn[1]] for nn in nearest], axis=1)
                     a = np.array([n[0][1] for n in nearest])
                     n_actions.append(na)
                     actions.append(a)

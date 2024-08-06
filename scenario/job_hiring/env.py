@@ -1,3 +1,4 @@
+from collections import Counter
 from copy import copy
 from typing import Union
 
@@ -235,10 +236,12 @@ class JobHiringEnv(Scenario):
 
     @staticmethod
     def _entropy(values, base=2):
-        values = np.array(values).astype(np.int64)
-        # values.sort()
+        values = np.array(sorted(values))
+        #
         values += 1  # Zeros produce NaN
-        unique, counts = np.unique(values, return_counts=True)
+        counter = Counter(values)
+        unique, counts = np.array(list(counter.keys())), np.array(list(counter.values()))
+
         # Incomplete unique values
         if len(unique) < base:
             new_u = []
@@ -246,18 +249,21 @@ class JobHiringEnv(Scenario):
             for i in range(1, base+1):
                 new_u.append(i)
                 if i not in unique:
-                    new_c.append(0)
+                    new_c.append(0.0)
                 else:
                     idx = np.argwhere(unique == i)[0][0]
                     new_c.append(counts[idx])
             # unique = new_u
             counts = np.array(new_c)
             # Zeros produce NaN
-            counts = counts.astype(np.float64)
             counts += 1e-10
 
-        probabilities = counts / counts.sum()
-        entropy = -np.sum(probabilities * np.emath.logn(base, probabilities))
+        probabilities = counts / sum(counts)
+        # Is faster
+        if base == 2:
+            entropy = -sum(probabilities * np.log2(probabilities))
+        else:
+            entropy = -sum(probabilities * np.emath.logn(base, probabilities))
 
         return probabilities, entropy
 
