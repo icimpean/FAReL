@@ -9,15 +9,25 @@ class GroupNotion(Enum):
     """Enumeration for group fairness notions"""
     StatisticalParity = auto()
     EqualOpportunity = auto()
-    PredictiveEquality = auto()
-    EqualizedOdds = auto()
     OverallAccuracyEquality = auto()
     PredictiveParity = auto()
+    PredictiveEquality = auto()
+    EqualizedOdds = auto()
     ConditionalUseAccuracyEquality = auto()
     TreatmentEquality = auto()
+    #
+    StatisticalParity_t = auto()
+    EqualOpportunity_t = auto()
+    OverallAccuracyEquality_t = auto()
+    PredictiveParity_t = auto()
+    PredictiveEquality_t = auto()
+    EqualizedOdds_t = auto()
+    ConditionalUseAccuracyEquality_t = auto()
+    TreatmentEquality_t = auto()
 
 
 ALL_GROUP_NOTIONS = list(GroupNotion)
+TIMESTEP_GROUP_NOTIONS = [g for g in GroupNotion if g.name.endswith("_t")]
 
 
 class GroupFairnessBase(object):

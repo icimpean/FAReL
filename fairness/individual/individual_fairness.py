@@ -9,7 +9,7 @@ import numpy as np
 import scipy.spatial.distance
 from river.neighbors.base import FunctionWrapper
 
-from fairness.history import History, DiscountedHistory
+from fairness.history import History, DiscountedHistory, HistoryTimestep
 from fairness.individual import IndividualNotion, IndividualFairnessBase
 from fairness.individual.individual_deque import IndividualDeque
 from fairness.individual.swinn.optimised_swinn import OptimisedSWINN
@@ -105,10 +105,14 @@ class IndividualFairness(IndividualFairnessBase):
         # Mapping from enumeration to fairness method
         self._map = {
             IndividualNotion.IndividualFairness: self.individual_fairness,
+            IndividualNotion.IndividualFairness_t: self.individual_fairness,
             IndividualNotion.WeaklyMeritocratic: self.weakly_meritocratic,
+            # IndividualNotion.WeaklyMeritocratic_t: self.weakly_meritocratic,
             IndividualNotion.ConsistencyScoreComplement: self.consistency_score_complement,
+            # IndividualNotion.ConsistencyScoreComplement_t: self.consistency_score_complement,
             #
             IndividualNotion.ConsistencyScoreComplement_INN: self.consistency_score_complement_inn,
+            # IndividualNotion.ConsistencyScoreComplement_INN_t: self.consistency_score_complement_inn,
         }
         self.ind_distance_metrics = ind_distance_metrics
         self.csc_distance_metrics = csc_distance_metrics
@@ -148,9 +152,10 @@ class IndividualFairness(IndividualFairnessBase):
 
         with_window = history.window is not None
         is_discounted = isinstance(history, DiscountedHistory)
+        is_t = isinstance(history, HistoryTimestep)
 
         # Keep track of the differences to discard once the window passes
-        if (with_window or is_discounted) and self._individual_last_window.get(distance_metric) is None:
+        if (with_window or is_discounted) and self._individual_last_window.get(distance_metric) is None and not is_t:
             self._individual_last_window[distance_metric] = deque(maxlen=history.window)
 
         # Can only compare as many individuals as present in self._individual_last_window + 1,
@@ -160,9 +165,16 @@ class IndividualFairness(IndividualFairnessBase):
 
         # If given n interactions/individuals, under the assumption that all interactions until n have been compared in
         #   the previous timestep, only individual n should be compared to 0 until n - 1
-        i = n - 1
-        map_i_j = [(i, j, states[i], states[j], scores[i], scores[j], similarity_metric, alpha, metric, num_actions)
-                   for j in range((n - 1) - 1, lowest_n - 1, -1)]
+        if history.newly_added == 1:
+            i = n - 1
+            map_i_j = [(i, j, states[i], states[j], scores[i], scores[j], similarity_metric, alpha, metric, num_actions)
+                       for j in range((n - 1) - 1, lowest_n - 1, -1)]
+        # Multiple individuals were added after last interaction: add all of them to all previous AND each other
+        else:
+            map_i_j = [(i, j, states[i], states[j], scores[i], scores[j], similarity_metric, alpha, metric, num_actions)
+                       for i in range(n - history.newly_added, n)
+                       for j in range(i - 1, lowest_n - 1, -1)
+                       ]
         results = [_pool_individual_fairness(ij) for ij in map_i_j]
         unsatisfied_pairs = 0
 
@@ -173,19 +185,25 @@ class IndividualFairness(IndividualFairnessBase):
                 last, _ = self._individual_last_window[distance_metric][0]
                 self._individual_total[distance_metric] -= np.nansum(last)
             # diffs, deque/heap
-            self._individual_last_window[distance_metric].append(([], IndividualDeque(max_n=5, window=history.window)))
+            for _ in range(history.newly_added):
+                self._individual_last_window[distance_metric].append(([], IndividualDeque(max_n=5, window=history.window)))
 
         # Windowed + full history
         if not is_discounted:
             if self._individual_total.get(distance_metric) is None:
                 self._individual_total[distance_metric] = 0.0
-            total = self._individual_total[distance_metric]
-            total_comparisons = n * (n - 1) // 2
+            if is_t:
+                total = 0
+                total_comparisons = len(results)
+            else:
+                total = self._individual_total[distance_metric]
+                total_comparisons = n * (n - 1) // 2
 
+            # Timestep has different indices
             for i, j, fair, diff, D, d in results:
                 if not np.isnan(diff):
                     total += diff
-                if with_window:
+                if with_window and not is_t:
                     # j is a previously encountered individual, i is current
                     self._individual_last_window[distance_metric][j][0].append(diff)
                     #
@@ -263,7 +281,7 @@ class IndividualFairness(IndividualFairnessBase):
             approx = unsatisfied_pairs == 0
 
         # < 2 individuals encountered, assume it's fair
-        if n < 2:
+        if len(results) < 2:
             diff = 0.0
         else:
             diff = total / max(1, total_comparisons)
@@ -358,20 +376,25 @@ class IndividualFairness(IndividualFairnessBase):
             International Conference on Machine Learning, 2013.
         """
         distance_metric, metric = distance_metric
-        states, actions, _, _, _ = history.get_history()
+        is_t = isinstance(history, HistoryTimestep)
+        # TODO: nearest neighbours at single timestep currently interpreted as nearest neighbours of current timesteps
+        #  individuals with entire sliding/discounted history
 
         # If individual fairness was not run yet for given distance metric, run it to compute the distances
         if distance_metric not in self.ind_distance_metrics:
             self.individual_fairness(history, threshold, similarity_metric, alpha=1.0,
                                      distance_metric=(distance_metric, metric))
 
-        n = len(actions)
-        if n < 2:
+        n = len(history.actions)
+        if n < history.newly_added + 1:
             CON = 0.0
         else:
             # Use distances already calculated and stored from individual fairness notion
             #   (d, j, diff, actions[i], actions[j])
-            nearest = [deq.n_smallest for _, deq in self._individual_last_window[distance_metric]]
+            if is_t:
+                nearest = [deq.n_smallest for _, deq in self._individual_last_window[distance_metric][n-history.newly_added:n]]
+            else:
+                nearest = [deq.n_smallest for _, deq in self._individual_last_window[distance_metric]]
             try:
                 n_actions = np.mean([[n[-2] for n in nn] for nn in nearest], axis=1)
             except ValueError:
@@ -443,6 +466,7 @@ class IndividualFairness(IndividualFairnessBase):
                 # Retrieve nearest neighbours (item, nn, dists)
                 nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1, return_distances=False, return_as_array=True)
                 n_actions = np.mean([[n[1] for n in nn[1]] for nn in nearest], axis=1)
+                # n_actions = [np.nanmean([n[1] for n in nn[1]]) for nn in nearest]
                 actions = np.array([n[0][1] for n in nearest])
 
             else:
@@ -450,14 +474,15 @@ class IndividualFairness(IndividualFairnessBase):
                 actions = []
                 for sf, nbrs in self._neighbours.items():
                     nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1)
-                    na = np.mean([[n[1] for n in nn[1]] for nn in nearest], axis=1)
+                    # na = np.mean([[n[1] for n in nn[1]] for nn in nearest], axis=1)
+                    na = [np.nanmean([n[1] for n in nn[1]]) for nn in nearest]
                     a = np.array([n[0][1] for n in nearest])
                     n_actions.append(na)
                     actions.append(a)
                 n_actions = np.hstack(n_actions)
                 actions = np.hstack(actions)
             # compute consistency score
-            CON = - abs(actions - n_actions).mean()
+            CON = - np.nanmean(abs(actions - n_actions))
 
         diff = CON
 

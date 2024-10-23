@@ -301,3 +301,6 @@ class TransactionModelMDP(Scenario):
                 currency / self.maxima["currency"],
             ])
         return norm_array
+
+    def get_all_entities_in_state(self, state: CombinedState, action, true_action, score, reward):
+        return [(state, action, true_action, score, reward)]

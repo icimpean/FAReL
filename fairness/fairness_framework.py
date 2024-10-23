@@ -1,10 +1,12 @@
 from typing import Union, List
 
+import gymnasium as gym
+
 from fairness import SensitiveAttribute
-from fairness.group import GroupNotion, ALL_GROUP_NOTIONS
+from fairness.group import GroupNotion, ALL_GROUP_NOTIONS, TIMESTEP_GROUP_NOTIONS
 from fairness.group.group_fairness import GroupFairness
-from fairness.history import History, SlidingWindowHistory, DiscountedHistory
-from fairness.individual import ALL_INDIVIDUAL_NOTIONS, IndividualNotion
+from fairness.history import History, SlidingWindowHistory, DiscountedHistory, HistoryTimestep
+from fairness.individual import ALL_INDIVIDUAL_NOTIONS, IndividualNotion, TIMESTEP_INDIVIDUAL_NOTIONS
 from fairness.individual.individual_fairness import IndividualFairness
 from scenario import CombinedState
 
@@ -45,6 +47,7 @@ class FairnessFramework(object):
         else:
             self.history = SlidingWindowHistory(actions, self.window, store_interactions=self.store_interactions,
                                                 has_individual_fairness=self.has_individual_fairness)
+        self.history_t = HistoryTimestep(actions, has_individual_fairness=self.has_individual_fairness)
         #
         self.sensitive_attributes = [sensitive_attributes] \
             if isinstance(sensitive_attributes, SensitiveAttribute) else sensitive_attributes
@@ -71,7 +74,7 @@ class FairnessFramework(object):
 
         self.all_notions = self.group_notions + self.individual_notions
 
-    def update_history(self, episode, t, state, action, true_action, score, reward):
+    def update_history(self, episode, t, entities):
         """Update the framework with a new observed tuple
 
         Args:
@@ -83,21 +86,24 @@ class FairnessFramework(object):
             score: The score assigned by the agent for the given state, or state-action pair
             reward: The reward received for the given action
         """
-        self.history.update(episode, t, state, action, true_action, score, reward, self.sensitive_attributes)
+        self.history_t.update_t(episode, t, entities, self.sensitive_attributes)
+        self.history.update(episode, t, entities, self.sensitive_attributes)
 
     def get_group_notion(self, group_notion: GroupNotion, sensitive_attribute: SensitiveAttribute, threshold=None):
         """Get the given group notion"""
-        return self.group_fairness.get_notion(group_notion, self.history, sensitive_attribute, threshold)
+        history = self.history_t if group_notion in TIMESTEP_GROUP_NOTIONS else self.history
+        return self.group_fairness.get_notion(group_notion, history, sensitive_attribute, threshold)
 
     def get_individual_notion(self, individual_notion: IndividualNotion,
                               threshold=None, similarity_metric=None, alpha=None,
                               distance_metric=("braycurtis", "braycurtis")):
         """Get the given individual notion"""
-        return self.individual_fairness.get_notion(individual_notion, self.history, threshold,
+        history = self.history_t if individual_notion in TIMESTEP_INDIVIDUAL_NOTIONS else self.history
+        return self.individual_fairness.get_notion(individual_notion, history, threshold,
                                                    similarity_metric, alpha, distance_metric)
 
 
-class ExtendedfMDP(object):
+class ExtendedfMDP(gym.Env):
     """An extended job hiring fMDP, with a fairness framework"""
     def __init__(self, env, fairness_framework: FairnessFramework):
         # Super call
@@ -129,7 +135,7 @@ class ExtendedfMDP(object):
         for notion in self.fairness_framework.individual_notions:
             self.obj_names.append(notion.name)
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         self._t += 1
         self._episode += 1
         self.fairness_framework.history.features = self.env._features_i
@@ -141,8 +147,8 @@ class ExtendedfMDP(object):
         true_action = info.get("true_action")
         if true_action is None:
             true_action = -1
-        self.fairness_framework.update_history(self._episode, self._t,
-                                               self.env.previous_state, action, true_action, scores, reward)
+        entities = self.env.get_all_entities_in_state(self.env.previous_state, action, true_action, scores, reward)
+        self.fairness_framework.update_history(self._episode, self._t, entities)
 
         # Add fairness notions as additional rewards
         reward = [reward]
@@ -157,8 +163,6 @@ class ExtendedfMDP(object):
         for notion, distance_metric in zip(self.fairness_framework.individual_notions,
                                            self.fairness_framework.distance_metrics):
             if distance_metric.startswith("H") and distance_metric.endswith("OM"):
-                # metric = lambda state1, state2: self.env.H_OM_distance(state1, state2, distance_metric,
-                #                                                        self.fairness_framework.alpha, exp=True)
                 metric = self.H_OM_distance[distance_metric]
             elif distance_metric == "braycurtis":
                 metric = self.env.braycurtis_metric  # TODO: w

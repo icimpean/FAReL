@@ -27,19 +27,21 @@ class History(object):
         self.CM = ConfusionMatrix(self.env_actions)
         self.t = 0
         self.features = None
+        self.newly_added = 0
 
-    def update(self, episode, t, state, action, true_action, score, reward,
-               sensitive_attributes: List[SensitiveAttribute]):
+    def update(self, episode, t, entities, sensitive_attributes: List[SensitiveAttribute]):
         """Update the history with a newly observed tuple
 
         Args:
             episode: The episode where the interaction took place
             t: The timestep of the interaction
-            state: The observed state
-            action: The action taken in that state
-            true_action: The correct action according to the ground truth of the problem
-            score: The score assigned by the agent for the given state, or state-action pair
-            reward: The reward received for the given action.
+            entities: tuples of the shape (state, action, true_action, score, reward), containing all the newly observed
+                entities at timestep t
+                state: The observed state
+                action: The action taken in that state
+                true_action: The correct action according to the ground truth of the problem
+                score: The score assigned by the agent for the given state, or state-action pair
+                reward: The reward received for the given action.
             sensitive_attributes: The sensitive attributes for which to store computations.
         """
         raise NotImplementedError
@@ -80,40 +82,46 @@ class SlidingWindowHistory(History):
             self.ids = deque(maxlen=self.window)
             self.feature_values = {}
 
-    def update(self, episode, t, state, action, true_action, score, reward,
+    def update(self, episode, t, entities,
                sensitive_attributes: List[SensitiveAttribute]):
         """Update the history with a newly observed tuple
 
         Args:
             episode: The episode where the interaction took place
             t: The timestep of the interaction
-            state: The observed state
-            action: The action taken in that state
-            true_action: The correct action according to the ground truth of the problem
-            score: The score assigned by the agent for the given state, or state-action pair
-            reward: The reward received for the given action.
+            entities: tuples of the shape (state, action, true_action, score, reward), containing all the newly observed
+                entities at timestep t
+                state: The observed state
+                action: The action taken in that state
+                true_action: The correct action according to the ground truth of the problem
+                score: The score assigned by the agent for the given state, or state-action pair
+                reward: The reward received for the given action.
             sensitive_attributes: The sensitive attributes for which to store computations.
         """
         self.t = t
+        #
+        self.newly_added = len(entities)
         if self.store_interactions:
-            self.states.append(state)
-            self.actions.append(action)
-            self.true_actions.append(true_action)
-            self.scores.append(score)
-            self.rewards.append(reward)
-            self.ids.append(f"E{episode}T{t}")
+            # TODO: append vs extend performance
+            for n, (state, action, true_action, score, reward) in enumerate(entities):
+                self.states.append(state)
+                self.actions.append(action)
+                self.true_actions.append(true_action)
+                self.scores.append(score)
+                self.rewards.append(reward)
+                self.ids.append(f"E{episode}T{t}Ent{n}")
 
-            features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
+                features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
 
-            if len(self.feature_values) == 0:
-                for feature in features:
-                    self.feature_values[feature] = deque(maxlen=self.window)
+                if len(self.feature_values) == 0:
+                    for feature in features:
+                        self.feature_values[feature] = deque(maxlen=self.window)
 
-            values = state.get_features(features)
-            for feature, value in zip(features, values):
-                if isinstance(value, Enum):
-                    value = value.value
-                self.feature_values[feature].append(value)
+                values = state.get_features(features)
+                for feature, value in zip(features, values):
+                    if isinstance(value, Enum):
+                        value = value.value
+                    self.feature_values[feature].append(value)
 
         else:
             if len(self.confusion_matrices) == 0:
@@ -127,17 +135,18 @@ class SlidingWindowHistory(History):
                     else:
                         self.confusion_matrices[sensitive_attribute] = deque(maxlen=self.window)
 
-            # Add information to corresponding confusion matrices
-            self._add_cm_value(state, action, true_action, score, reward, sensitive_attributes)
+            for n, (state, action, true_action, score, reward) in enumerate(entities):
+                # Add information to corresponding confusion matrices
+                self._add_cm_value(state, action, true_action, score, reward, sensitive_attributes)
 
-            if self.has_individual_fairness:
-                # Store state array and other required info only
-                self.states.append(self.store_state_array(state))
-                self.actions.append(action)
-                # self.true_actions.append(true_action)
-                self.scores.append(score)
-                # self.rewards.append(reward)
-                self.ids.append(f"E{episode}T{t}")
+                if self.has_individual_fairness:
+                    # Store state array and other required info only
+                    self.states.append(self.store_state_array(state))
+                    self.actions.append(action)
+                    # self.true_actions.append(true_action)
+                    self.scores.append(score)
+                    # self.rewards.append(reward)
+                    self.ids.append(f"E{episode}T{t}Ent{n}")
 
     def get_history(self):
         """Get history"""
@@ -218,3 +227,60 @@ class DiscountedHistory(SlidingWindowHistory):
         #
         self.discount_factor = discount_factor
         self.discount_threshold = discount_threshold
+
+
+class HistoryTimestep(SlidingWindowHistory):
+    def __init__(self, env_actions, has_individual_fairness=True,
+                 store_state_array=lambda state: state):
+        # Super call
+        window = None
+        store_interactions = True
+        super(HistoryTimestep, self).__init__(env_actions, window, store_interactions, has_individual_fairness,
+                                              store_state_array)
+
+    def update_t(self, episode, t, entities, sensitive_attributes: List[SensitiveAttribute]):
+        self.t = t
+        self.newly_added = len(entities)
+
+        if self.store_interactions:
+            self.states, self.actions, self.true_actions, self.scores, self.rewards = zip(*entities)
+            self.ids = [f"E{episode}T{t}Ent{n}" for n in range(len(entities))]
+
+            # TODO: still needed?
+            # features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
+            #
+            # if len(self.feature_values) == 0:
+            #     for feature in features:
+            #         self.feature_values[feature] = deque(maxlen=self.window)
+            #
+            # values = state.get_features(features)
+            # for feature, value in zip(features, values):
+            #     if isinstance(value, Enum):
+            #         value = value.value
+            #     self.feature_values[feature].append(value)
+
+        else:
+            if len(self.confusion_matrices) == 0:
+                for sensitive_attribute in sensitive_attributes:
+                    if self.window is None:
+                        # Need 2 confusion matrices (4 values each) for sensitive & other values
+                        #   => 8 possibilities for each interaction:
+                        #       * 0 - 3: sensitive TN, FP, FN, TP
+                        #       * 4 - 7: other TN, FP, FN, TP
+                        self.confusion_matrices[sensitive_attribute] = [0 for _ in range(8)]
+                    else:
+                        self.confusion_matrices[sensitive_attribute] = deque(maxlen=self.window)
+
+            # Add information to corresponding confusion matrices
+            for state, action, true_action, score, reward in entities:
+                self._add_cm_value(state, action, true_action, score, reward, sensitive_attributes)
+
+            if self.has_individual_fairness:
+                for n, (state, action, true_action, score, reward) in enumerate(entities):
+                    # Store state array and other required info only
+                    self.states.append(self.store_state_array(state))
+                    self.actions.append(action)
+                    # self.true_actions.append(true_action)
+                    self.scores.append(score)
+                    # self.rewards.append(reward)
+                    self.ids.append(f"E{episode}T{t}Ent{n}")

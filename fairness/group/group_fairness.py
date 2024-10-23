@@ -25,13 +25,21 @@ class GroupFairness(GroupFairnessBase):
         # Mapping from enumeration to fairness method
         self._map = {
             GroupNotion.StatisticalParity: self.statistical_parity,
+            GroupNotion.StatisticalParity_t: self.statistical_parity,
             GroupNotion.EqualOpportunity: self.equal_opportunity,
+            GroupNotion.EqualOpportunity_t: self.equal_opportunity,
             GroupNotion.PredictiveEquality: self.predictive_equality,
+            GroupNotion.PredictiveEquality_t: self.predictive_equality,
             GroupNotion.EqualizedOdds: self.equalized_odds,
+            GroupNotion.EqualizedOdds_t: self.equalized_odds,
             GroupNotion.OverallAccuracyEquality: self.overall_accuracy_equality,
+            GroupNotion.OverallAccuracyEquality_t: self.overall_accuracy_equality,
             GroupNotion.PredictiveParity: self.predictive_parity,
+            GroupNotion.PredictiveParity_t: self.predictive_parity,
             GroupNotion.ConditionalUseAccuracyEquality: self.conditional_use_accuracy_equality,
+            GroupNotion.ConditionalUseAccuracyEquality_t: self.conditional_use_accuracy_equality,
             GroupNotion.TreatmentEquality: self.treatment_equality,
+            GroupNotion.TreatmentEquality_t: self.treatment_equality,
         }
 
     def get_notion(self, group_notion: GroupNotion, history: History,

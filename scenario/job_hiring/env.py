@@ -411,3 +411,6 @@ class JobHiringEnv(Scenario):
         norm_array = np.array([self.applicant_generator.normalise_feature(feature, value)
                                for feature, value in state.sample_dict.items()])
         return norm_array
+
+    def get_all_entities_in_state(self, state: CombinedState, action, true_action, score, reward):
+        return [(state, action, true_action, score, reward)]

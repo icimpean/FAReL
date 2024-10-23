@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 from numpy.random import Generator
 from scipy.linalg import norm
-from scipy.spatial.distance import minkowski
 
 
 class Feature(Enum):
@@ -390,4 +389,8 @@ class Scenario(object):
 
     def normalise_state(self, state: CombinedState):
         """Used by the RL agent interacting with the environment"""
+        raise NotImplementedError
+
+    def get_all_entities_in_state(self, state: CombinedState, action, true_action, score, reward):
+        """Returns a list of combined states, indicating all the entities encountered at timestep t"""
         raise NotImplementedError

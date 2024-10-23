@@ -608,7 +608,7 @@ class OptimisedSWINN(neighbors.SWINN):
             rn._search_neighbours = [n.item for n in neighbors]
             rn._search_distributions = dists
             rn._search_n_actions = [n.item[1] for n in neighbors]
-            rn._search_mean_n_actions = sum(rn._search_n_actions) / len(rn._search_n_actions)
+            rn._search_mean_n_actions = sum(rn._search_n_actions) / max(1, len(rn._search_n_actions))
 
         self._refine(affected)  # TODO: with search
 

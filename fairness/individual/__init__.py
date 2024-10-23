@@ -7,12 +7,18 @@ class IndividualNotion(Enum):
     WeaklyMeritocratic = auto()
     ConsistencyScoreComplement = auto()
     # Incremental nearest neighbour-based implementations
-    IndividualFairness_INN = auto()
-    WeaklyMeritocratic_INN = auto()  # TODO
-    ConsistencyScoreComplement_INN = auto()  # TODO
+    # IndividualFairness_INN = auto()
+    # WeaklyMeritocratic_INN = auto()
+    ConsistencyScoreComplement_INN = auto()
+    #
+    IndividualFairness_t = auto()
+    # WeaklyMeritocratic_t = auto()
+    # ConsistencyScoreComplement_t = auto()
+    # ConsistencyScoreComplement_INN_t = auto()
 
 
 ALL_INDIVIDUAL_NOTIONS = list(IndividualNotion)
+TIMESTEP_INDIVIDUAL_NOTIONS = [i for i in IndividualNotion if i.name.endswith("_t")]
 
 
 class IndividualFairnessBase(object):
