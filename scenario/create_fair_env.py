@@ -190,8 +190,8 @@ def create_fairness_framework_env(args):
     _ind_notions_mapping = {
         first_ind_f_index: IndividualNotion.IndividualFairness,
         first_ind_f_index + 1: IndividualNotion.ConsistencyScoreComplement,
-        # first_ind_f_index + 2: IndividualNotion.ConsistencyScoreComplement_INN,  # TODO
-        first_ind_f_index + 2: IndividualNotion.IndividualFairness_t,
+        first_ind_f_index + 2: IndividualNotion.ConsistencyScoreComplement_INN,  # TODO
+        first_ind_f_index + 3: IndividualNotion.IndividualFairness_t,
     }
 
     all_individual_notions = [_ind_notions_mapping[o] for o in args.objectives if o >= first_ind_f_index]
