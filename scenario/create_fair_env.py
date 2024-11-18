@@ -13,8 +13,8 @@ sys.path.append("./")  # for command-line execution to find the other packages (
 
 from fairness import SensitiveAttribute, CombinedSensitiveAttribute
 from fairness.fairness_framework import FairnessFramework, ExtendedfMDP
-from fairness.group import GroupNotion
-from fairness.individual import IndividualNotion
+from fairness.group import GroupNotion, ALL_GROUP_NOTIONS
+from fairness.individual import IndividualNotion, ALL_INDIVIDUAL_NOTIONS
 from scenario import FeatureBias
 from scenario.fraud_detection.MultiMAuS.simulator import parameters
 from scenario.fraud_detection.MultiMAuS.simulator.transaction_model import TransactionModel
@@ -171,45 +171,16 @@ def create_fairness_framework_env(args):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    all_group_notions = [GroupNotion.StatisticalParity, GroupNotion.EqualOpportunity,
-                         GroupNotion.OverallAccuracyEquality, GroupNotion.PredictiveParity,
-                         GroupNotion.StatisticalParity_t, GroupNotion.EqualOpportunity_t,
-                         GroupNotion.OverallAccuracyEquality_t, GroupNotion.PredictiveParity_t,
-                         ]
-    first_ind_f_index = len(all_group_notions) + 1
+    ALL_OBJECTIVES = ALL_REWARDS + ALL_GROUP_NOTIONS + ALL_INDIVIDUAL_NOTIONS
+    sort_objectives = {o: i for i, o in enumerate(ALL_OBJECTIVES)}
+    all_args_objectives = args.objectives + args.compute_objectives
+    ordered_objectives = sorted(all_args_objectives,
+                                key=lambda o: sort_objectives[get_objective(OBJECTIVES_MAPPING[o])])
+    args.objectives = [i for i, o in enumerate(ordered_objectives) if o in args.objectives]
 
-    if args.single_objective != -1:
-        # Only reward and group notions are always kept, single individual notion gets index first_ind_f_index
-        args.objectives = [min(args.single_objective, first_ind_f_index)]
-        print("Single objective:", args.objectives)
-        if args.objectives[0] >= first_ind_f_index:
-            args.distance_metrics = args.distance_metrics[:1]
-            print("Distance metric:", args.distance_metrics)
-
-    #
-    _ind_notions_mapping = {
-        first_ind_f_index: IndividualNotion.IndividualFairness,
-        first_ind_f_index + 1: IndividualNotion.ConsistencyScoreComplement,
-        first_ind_f_index + 2: IndividualNotion.ConsistencyScoreComplement_INN,  # TODO
-        first_ind_f_index + 3: IndividualNotion.IndividualFairness_t,
-    }
-
-    all_individual_notions = [_ind_notions_mapping[o] for o in args.objectives if o >= first_ind_f_index]
-    if args.no_individual:
-        all_individual_notions = []
-    elif args.compute_individual:
-        all_individual_notions = [IndividualNotion.IndividualFairness, IndividualNotion.ConsistencyScoreComplement,
-                                  IndividualNotion.ConsistencyScoreComplement_INN]
-        args.distance_metrics = args.distance_metrics[:1] * len(all_individual_notions)
-    # TODO: individual fairness notion are calculated as requested: o > 5 will be given an index -1?
-    elif first_ind_f_index not in args.objectives:
-        # Only #7
-        if first_ind_f_index + 1 not in args.objectives:
-            o_diff = 2
-        # Only 6+
-        else:
-            o_diff = 1
-        args.objectives = [o if o < first_ind_f_index else o - o_diff for o in args.objectives]
+    mapped_ordered_notions = [OBJECTIVES_MAPPING[n] for n in ordered_objectives]
+    all_group_notions = [n for n in mapped_ordered_notions if isinstance(n, GroupNotion)]
+    all_individual_notions = [n for n in mapped_ordered_notions if isinstance(n, IndividualNotion)]
 
     use_discount_history = args.discount_history != 0
     discount_factor = args.discount_factor if use_discount_history else None
@@ -232,13 +203,12 @@ def create_fairness_framework_env(args):
     # Extend the environment with fairness framework
     env = ExtendedfMDP(env, fairness_framework)
 
-    # TODO:  #notions = #group notions + #individual notions with specific similarity distance
     # TODO: max reward still ok with new metrics/group divisions
     _num_group_notions = (len(sensitive_attribute) if args.combined_sensitive_attributes >= 2 else 1) * len(
         all_group_notions)
     _num_notions = _num_group_notions + len(all_individual_notions)
     max_reward = args.episode_length * 1
-    scale = np.array([1] + [1] * _num_notions)
+    scale = np.array([1] + [1] * _num_notions)  # TODO: treatment equality scale+max
     ref_point = np.array([-max_reward] + [-args.episode_length] * _num_notions)
     scaling_factor = torch.tensor([[1.0] + ([1] * _num_notions) + [0.1]]).to(device)
     max_return = np.array([max_reward] + [0] * _num_notions) / scale
@@ -250,15 +220,66 @@ def create_fairness_framework_env(args):
 
 
 #
+Reward = "Reward"
+ALL_REWARDS = [Reward]
+#
+OBJECTIVES_MAPPING = {
+    # Rewards
+    "R": Reward,
+    # Group notions (over history)
+    "SP": GroupNotion.StatisticalParity,
+    "EO": GroupNotion.EqualOpportunity,
+    "OAE": GroupNotion.OverallAccuracyEquality,
+    "PP": GroupNotion.PredictiveParity,
+    "PE": GroupNotion.PredictiveEquality,
+    "EqOdds": GroupNotion.EqualizedOdds,
+    "CUAE": GroupNotion.ConditionalUseAccuracyEquality,
+    "TE": GroupNotion.TreatmentEquality,
+    # Group notions (over timestep)
+    "SP_t": GroupNotion.StatisticalParity_t,
+    "EO_t": GroupNotion.EqualOpportunity_t,
+    "OAE_t": GroupNotion.OverallAccuracyEquality_t,
+    "PP_t": GroupNotion.PredictiveParity_t,
+    "PE_t": GroupNotion.PredictiveEquality_t,
+    "EqOdds_t": GroupNotion.EqualizedOdds_t,
+    "CUAE_t": GroupNotion.ConditionalUseAccuracyEquality_t,
+    "TE_t": GroupNotion.TreatmentEquality_t,
+    # Individual notions (over history)
+    "IF": IndividualNotion.IndividualFairness,
+    "CSC": IndividualNotion.ConsistencyScoreComplement,
+    "CSC_inn": IndividualNotion.ConsistencyScoreComplement_INN,
+    # Individual notions (over timestep)
+    "IF_t": IndividualNotion.IndividualFairness_t,
+    # TODO: include
+    # "CSC_t": IndividualNotion.ConsistencyScoreComplement_t,
+    # "CSC_inn_t": IndividualNotion.ConsistencyScoreComplement_INN_t,
+}
+OBJECTIVES_MAPPING_r = {v: k for k, v in OBJECTIVES_MAPPING.items()}
+parser_all_objectives = ", ".join([f"{v if isinstance(v, str) else v.name} ({k})"
+                                   for k, v in OBJECTIVES_MAPPING.items()])
+
+
+def get_objective(obj):
+    try:
+        return GroupNotion[obj]
+    except KeyError:
+        pass
+    try:
+        return IndividualNotion[obj]
+    except KeyError:
+        pass
+    return obj
+
+
 fMDP_parser = argparse.ArgumentParser(description='fMDP_parser', add_help=False)
-fMDP_parser.add_argument('--objectives', default=[0, 1], type=int, nargs='+',
-                         help='index for reward (0), StatisticalParity (1), EqualOpportunity (2), '
-                              'OverallAccuracyEquality (3), PredictiveParity (4), '
-                              'IndividualFairness (5), ConsistencyScoreComplement (6),'
-                              'ConsistencyScoreComplement_INN (7)')
-fMDP_parser.add_argument('--single_objective', default=-1, type=int, help="Use a single objective to train on")
-fMDP_parser.add_argument('--compute_individual', action='store_true', help='Compute individual fairness, '
-                                                                           'regardless of the objectives given for PCN')
+#
+fMDP_parser.add_argument('--objectives', default=['R', 'SP'],
+                         type=str, nargs='+', help='Abbreviations of the fairness notions to optimise, one or more of: '
+                                                   f'{parser_all_objectives}')
+fMDP_parser.add_argument('--compute_objectives', default=['R', 'SP', 'EO', 'OAE', 'PP', 'IF', 'CSC'],
+                         type=str, nargs='*', help='Abbreviations of the fairness notions to compute, '
+                                                   f'in addition to the ones being optimised: {parser_all_objectives}')
+#
 fMDP_parser.add_argument('--env', default='job', type=str, help='job or fraud')
 #
 fMDP_parser.add_argument('--seed', default=0, type=int, help='seed for rng')
@@ -290,8 +311,10 @@ fMDP_parser.add_argument('--wandb', default=1, type=int,
                          help="(Ignored, overrides to 0) use wandb for loggers or save local only")
 fMDP_parser.add_argument('--no_window', default=0, type=int, help="Use the full history instead of a window")
 fMDP_parser.add_argument('--no_individual', default=0, type=int, help="No individual fairness notions")
-fMDP_parser.add_argument('--distance_metrics', default=[], type=str, nargs='+',
-                         help='The distance metric to use for every individual fairness notion specified')
+fMDP_parser.add_argument('--distance_metrics', default=[], type=str, nargs='*',
+                         help='The distance metric to use for every individual fairness notion specified. '
+                              'The distance metrics should be supplied for each individual fairness in the objectives, '
+                              'then followed by computed objectives.')
 #
 fMDP_parser.add_argument('--combined_sensitive_attributes', default=0, type=int,
                          help='Use a combination of sensitive attributes to compute fairness notions')

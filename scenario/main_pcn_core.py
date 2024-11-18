@@ -478,8 +478,8 @@ if __name__ == '__main__':
     parser.add_argument('--model-updates', default=20, type=int,
                         help='number of times the model is updated at every training iteration')
     parser.add_argument('--top-episodes', default=50, type=int,
-                        help='top-n episodes used to compute target-return and horizon. \
-              Initially fill ER with n random episodes')
+                        help='top-n episodes used to compute target-return and horizon. '
+                             'Initially fill ER with n random episodes')
     parser.add_argument('--n-episodes', default=10, type=int,
                         help='number of episodes to run between each training iteration')
     parser.add_argument('--er-size', default=100, type=int,
@@ -494,28 +494,27 @@ if __name__ == '__main__':
 
     # ########
     # args.vsc = 0
-    # #
-    # args.steps = 10000  # TODO
+    #
+    # args.steps = 10000
     # args.window = 1000
     # args.team_size = 100
     # args.episode_length = args.team_size * 10
     # args.env = "fraud"
     # args.n_transactions = 200
     # args.fraud_proportion = 0.20
-    # # #
-    # args.top_episodes = 25  # TODO
+    #
+    # args.top_episodes = 25
     # args.n_episodes = 25
     # args.er_size = 200
     # args.model_updates = 10
-    # # #
-    # # args.objectives = [0, 5, 5, 5]  # TODO
-    # # # args.objectives = [0, 6, 6, 6]  # TODO
-    # args.objectives = [0, 1, 2, 5, 7, 9, 10, 11]
-    # args.distance_metrics = ["HMOM"] * 3#, "HMOM"]#, "HEOM"]
-    # # # args.bias = 1
-    # args.ignore_sensitive = True  # TODO
-    # # # # args.log_compact = True
-    # # args.compute_individual = True
+    #
+    # args.objectives = ["R", "SP", "IF"]#, "IF", "IF"]
+    # args.compute_objectives = ["EO", "PP"]
+    # args.distance_metrics = ["braycurtis"]#, "HMOM", "HEOM"]
+    # args.bias = 1
+    # args.ignore_sensitive = True
+    # args.log_compact = True
+    # args.compute_individual = True
     # args.combined_sensitive_attributes = 0
     # args.log_dir = f"knn_graph{args.combined_sensitive_attributes}"
 
@@ -529,6 +528,7 @@ if __name__ == '__main__':
     n_evaluations = 10
 
     env, logdir, ref_point, scaling_factor, max_return = create_fairness_framework_env(args)
+    print(args)
 
     kw = "small" if args.model == "densesmall" else "big"
     ss, se, sa = ss_emb[env_type][kw], se_emb[kw], sa_emb[kw]

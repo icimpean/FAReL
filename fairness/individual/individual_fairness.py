@@ -106,7 +106,7 @@ class IndividualFairness(IndividualFairnessBase):
         self._map = {
             IndividualNotion.IndividualFairness: self.individual_fairness,
             IndividualNotion.IndividualFairness_t: self.individual_fairness,
-            IndividualNotion.WeaklyMeritocratic: self.weakly_meritocratic,
+            # IndividualNotion.WeaklyMeritocratic: self.weakly_meritocratic,
             # IndividualNotion.WeaklyMeritocratic_t: self.weakly_meritocratic,
             IndividualNotion.ConsistencyScoreComplement: self.consistency_score_complement,
             # IndividualNotion.ConsistencyScoreComplement_t: self.consistency_score_complement,

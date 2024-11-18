@@ -4,7 +4,7 @@ from enum import Enum, auto
 class IndividualNotion(Enum):
     """Enumeration for group fairness notions"""
     IndividualFairness = auto()
-    WeaklyMeritocratic = auto()
+    # WeaklyMeritocratic = auto()
     ConsistencyScoreComplement = auto()
     # Incremental nearest neighbour-based implementations
     # IndividualFairness_INN = auto()
