@@ -186,7 +186,9 @@ class IndividualFairness(IndividualFairnessBase):
                 self._individual_total[distance_metric] -= np.nansum(last)
             # diffs, deque/heap
             for _ in range(history.newly_added):
-                self._individual_last_window[distance_metric].append(([], IndividualDeque(max_n=5, window=history.window)))
+                self._individual_last_window[distance_metric].append(([],
+                                                                      IndividualDeque(max_n=history.nearest_neighbours,
+                                                                                      window=history.window)))
 
         # Windowed + full history
         if not is_discounted:
@@ -227,14 +229,17 @@ class IndividualFairness(IndividualFairnessBase):
             for i, j, fair, diff, D, d in results:
                 # j is a previously encountered individual, i is current
                 shifted_j = j - shifted_n
+                shifted_i = i - lowest_n
                 self._individual_last_window[distance_metric][shifted_j][0].append(diff)
                 #
                 if len(self._individual_last_window[distance_metric][shifted_j][1]) == history.window:
                     self._individual_last_window[distance_metric][shifted_j][1].popleft()
                 self._individual_last_window[distance_metric][shifted_j][1].append(
-                    (d, i, diff, actions[i], actions[shifted_j]))
-                self._individual_last_window[distance_metric][i][1].append(
-                    (d, shifted_j, diff, actions[shifted_j], actions[i]))
+                    (d, shifted_i, diff, actions[shifted_i], actions[shifted_j]))
+                # if i > 130:
+                #     print("i, len", i, len(self._individual_last_window[distance_metric]), shifted_i)
+                self._individual_last_window[distance_metric][shifted_i][1].append(
+                    (d, shifted_j, diff, actions[shifted_j], actions[shifted_i]))
                 # Exact fair
                 if fair:
                     continue
@@ -248,7 +253,7 @@ class IndividualFairness(IndividualFairnessBase):
             total = 0
             total_comparisons = 0
             t = 0
-            remove = 0
+            remove_delay = 0
             for j in range(m - 1 - 1, -1, -1):
                 diffs_j = self._individual_last_window[distance_metric][j][0]
                 new_total = total + np.nansum(diffs_j) * (history.discount_factor ** t)
@@ -257,18 +262,19 @@ class IndividualFairness(IndividualFairnessBase):
 
                 # Check if difference is large enough
                 # noinspection PyUnresolvedReferences
-                if abs(total / max(1,
-                                   total_comparisons) - new_total / new_total_comparisons) < history.discount_threshold:
-                    remove += 1
-                    # Wait for comparisons of at least 5 consecutive individuals in the history
+                disc_diff = abs(total / max(1, total_comparisons) - new_total / new_total_comparisons)
+                if disc_diff <= history.discount_threshold:
+                    remove_delay += 1
+                    # Wait for comparisons of at least discount_delay consecutive individuals in the history
                     # to not pass the threshold
-                    if remove >= 5:
+                    if (j > 0) and (remove_delay > history.discount_delay):
                         # Remove all individuals before the given range
-                        print("discarding", j - 1, "/", m)
-
-                        for k in range(j - 1):
+                        print(f"*** discarding {j}/{m} (remove_delay {remove_delay}), diff: {disc_diff}", end="\t")
+                        print(f"previous_window_size: {len(self._individual_last_window[distance_metric])}", end="\t")
+                        for k in range(j - 1, -1, -1):
                             self._individual_last_window[distance_metric].popleft()
                             # TODO: How/When to remove corresponding interactions in history? (Check usage of other notions)
+                        print(f"new_window_size: {len(self._individual_last_window[distance_metric])}")
                         # Stop considering older encounters of individuals
                         break
 
@@ -431,16 +437,16 @@ class IndividualFairness(IndividualFairnessBase):
         sensitive_features = tuple(state[self.inn_sensitive_features])
         # print(sensitive_features)
 
-        # TODO:
         if isinstance(distance_metric, str) and distance_metric == "braycurtis":
             metric = scipy.spatial.distance.braycurtis
+        elif isinstance(distance_metric, str) and distance_metric == "minkowski":
+            metric = scipy.spatial.distance.minkowski
 
         def _init_swinn():
             window = self.steps if history.window is None else history.window
             return OptimisedSWINN(graph_k=10, dist_func=FunctionWrapper(metric), maxlen=window,
-                                  warm_up=59, # if self.inn_sensitive_features else 499,  # TODO: 500
-                                  max_candidates=None,
-                                  delta=0.0001, prune_prob=0.5,  # prune_prob=0.0
+                                  warm_up=49 if self.inn_sensitive_features else 499,
+                                  max_candidates=None, delta=0.0001, prune_prob=0.5,  # prune_prob=0.0
                                   n_iters=10, seed=self.seed)
 
         # Initialisation
@@ -464,7 +470,8 @@ class IndividualFairness(IndividualFairnessBase):
         else:
             if self.inn_sensitive_features is None:
                 # Retrieve nearest neighbours (item, nn, dists)
-                nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1, return_distances=False, return_as_array=True)
+                nearest = nbrs.get_nn_for_all(k=min(n, history.nearest_neighbours), epsilon=0.1,
+                                              return_distances=False, return_as_array=True)
                 n_actions = np.mean([[n[1] for n in nn[1]] for nn in nearest], axis=1)
                 # n_actions = [np.nanmean([n[1] for n in nn[1]]) for nn in nearest]
                 actions = np.array([n[0][1] for n in nearest])
@@ -473,7 +480,7 @@ class IndividualFairness(IndividualFairnessBase):
                 n_actions = []
                 actions = []
                 for sf, nbrs in self._neighbours.items():
-                    nearest = nbrs.get_nn_for_all(k=min(n, 5), epsilon=0.1)
+                    nearest = nbrs.get_nn_for_all(k=min(n, history.nearest_neighbours), epsilon=0.1)
                     # na = np.mean([[n[1] for n in nn[1]] for nn in nearest], axis=1)
                     na = [np.nanmean([n[1] for n in nn[1]]) for nn in nearest]
                     a = np.array([n[0][1] for n in nearest])

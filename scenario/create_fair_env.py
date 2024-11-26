@@ -182,9 +182,6 @@ def create_fairness_framework_env(args):
     all_group_notions = [n for n in mapped_ordered_notions if isinstance(n, GroupNotion)]
     all_individual_notions = [n for n in mapped_ordered_notions if isinstance(n, IndividualNotion)]
 
-    use_discount_history = args.discount_history != 0
-    discount_factor = args.discount_factor if use_discount_history else None
-    discount_threshold = args.discount_threshold if use_discount_history else None
     fairness_framework = FairnessFramework([a for a in HiringActions], sensitive_attribute,
                                            individual_notions=all_individual_notions,
                                            group_notions=all_group_notions,
@@ -192,13 +189,16 @@ def create_fairness_framework_env(args):
                                            distance_metrics=args.distance_metrics,
                                            alpha=args.fair_alpha,
                                            window=args.window,
-                                           discount_factor=discount_factor,
-                                           discount_threshold=discount_threshold,
+                                           discount_factor=args.discount_factor if args.discount_history else None,
+                                           discount_threshold=args.discount_threshold if args.discount_history else None,
+                                           discount_delay=args.discount_delay if args.discount_history else None,
+                                           nearest_neighbours=args.nearest_neighbours,
                                            inn_sensitive_features=None,
                                            # inn_sensitive_features=[HiringFeature.gender.value],  # TODO
                                            seed=seed,
                                            steps=int(args.steps),
-                                           store_interactions=False, has_individual_fairness=not args.no_individual)
+                                           store_interactions=False,
+                                           has_individual_fairness=len(all_individual_notions) > 0)
 
     # Extend the environment with fairness framework
     env = ExtendedfMDP(env, fairness_framework)
@@ -212,6 +212,12 @@ def create_fairness_framework_env(args):
     ref_point = np.array([-max_reward] + [-args.episode_length] * _num_notions)
     scaling_factor = torch.tensor([[1.0] + ([1] * _num_notions) + [0.1]]).to(device)
     max_return = np.array([max_reward] + [0] * _num_notions) / scale
+
+    print(all_args_objectives)
+    print(ordered_objectives)
+    print(max_return)
+    print(len(all_group_notions), len(all_individual_notions))
+
 
     env.nA = len(env.env.actions)
     env.scale = scale
@@ -276,7 +282,7 @@ fMDP_parser = argparse.ArgumentParser(description='fMDP_parser', add_help=False)
 fMDP_parser.add_argument('--objectives', default=['R', 'SP'],
                          type=str, nargs='+', help='Abbreviations of the fairness notions to optimise, one or more of: '
                                                    f'{parser_all_objectives}')
-fMDP_parser.add_argument('--compute_objectives', default=['R', 'SP', 'EO', 'OAE', 'PP', 'IF', 'CSC'],
+fMDP_parser.add_argument('--compute_objectives', default=['EO', 'OAE', 'PP', 'IF', 'CSC'],
                          type=str, nargs='*', help='Abbreviations of the fairness notions to compute, '
                                                    f'in addition to the ones being optimised: {parser_all_objectives}')
 #
@@ -300,18 +306,23 @@ fMDP_parser.add_argument('--bias', default=0, type=int, help='Which bias configu
 fMDP_parser.add_argument('--ignore_sensitive', action='store_true')
 # Fairness framework
 fMDP_parser.add_argument('--window', default=100, type=int, help='fairness framework window')
-fMDP_parser.add_argument('--discount_history', default=0, type=int,
-                         help='use a discounted history or sliding window implementation')
+fMDP_parser.add_argument('--discount_history', action='store_true',
+                         help='use a discounted history instead of a sliding window implementation')
 fMDP_parser.add_argument('--discount_factor', default=1.0, type=float,
                          help='fairness framework discount factor for history')
 fMDP_parser.add_argument('--discount_threshold', default=1e-5, type=float,
                          help='fairness framework discount threshold for history')
+fMDP_parser.add_argument('--discount_delay', default=5, type=int,
+                         help='the number of timesteps to consider for the fairness notion to not fluctuate more than '
+                              'discount_threshold, before deleting earlier timesteps')
+fMDP_parser.add_argument('--nearest_neighbours', default=5, type=int,
+                         help='the number of neighbours to consider for individual fairness notions based on CSC')
 fMDP_parser.add_argument('--fair_alpha', default=0.1, type=float, help='fairness framework alpha for similarity metric')
 fMDP_parser.add_argument('--wandb', default=1, type=int,
                          help="(Ignored, overrides to 0) use wandb for loggers or save local only")
 fMDP_parser.add_argument('--no_window', default=0, type=int, help="Use the full history instead of a window")
 fMDP_parser.add_argument('--no_individual', default=0, type=int, help="No individual fairness notions")
-fMDP_parser.add_argument('--distance_metrics', default=[], type=str, nargs='*',
+fMDP_parser.add_argument('--distance_metrics', default=['braycurtis'], type=str, nargs='*',
                          help='The distance metric to use for every individual fairness notion specified. '
                               'The distance metrics should be supplied for each individual fairness in the objectives, '
                               'then followed by computed objectives.')
@@ -321,3 +332,4 @@ fMDP_parser.add_argument('--combined_sensitive_attributes', default=0, type=int,
 #
 fMDP_parser.add_argument('--log_dir', default='new_experiment', type=str, help="Directory where to store results")
 fMDP_parser.add_argument('--log_compact', action='store_true', help='Save compact logs to save space.')
+fMDP_parser.add_argument('--log_coverage_set_only', action='store_true', help='Save only the coverage set logs')

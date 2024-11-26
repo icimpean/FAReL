@@ -119,7 +119,8 @@ class DiscreteHead(nn.Module):
 
 
 def run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger, current_ep, current_t,
-                         eval=False, normalise_state=False, eval_axes=False, log_compact=False):
+                         eval=False, normalise_state=False, eval_axes=False,
+                         log_compact=False, log_coverage_set_only=False):
     curr_t = time.time()
     transitions = []
     obs = env.reset()
@@ -159,20 +160,20 @@ def run_episode_fairness(env, model, desired_return, desired_horizon, max_return
         desired_horizon = np.float32(max(desired_horizon - 1, 1.))
         #
         next_t = time.time()
-        if not eval_axes or not (eval and log_compact):
+        if not eval_axes or log_coverage_set_only or not (eval and log_compact):
             log_entries.append(
                 agent_logger.create_entry(current_ep, t, obs, action, reward, done, info, next_t - curr_t,
                                           status))
         curr_t = next_t
         t += 1
 
-    if eval or not log_compact:
+    if eval or not (log_compact or log_coverage_set_only):
         agent_logger.write_data(log_entries, path)
     return transitions
 
 
 def eval_(env, model, coverage_set, horizons, max_return, agent_logger, current_ep, current_t, gamma=1., n=10,
-          normalise_state=False, eval_axes=False, log_compact=False):
+          normalise_state=False, eval_axes=False, log_compact=False, log_coverage_set_only=False):
     e_returns = np.empty((coverage_set.shape[0], n, coverage_set.shape[-1]))
     all_transitions = []
     for e_i, target_return, horizon in zip(np.arange(len(coverage_set)), coverage_set, horizons):
@@ -180,7 +181,8 @@ def eval_(env, model, coverage_set, horizons, max_return, agent_logger, current_
         for n_i in range(n):
             transitions = run_episode_fairness(env, model, target_return, np.float32(horizon), max_return, agent_logger,
                                                current_ep, current_t, eval=True, normalise_state=normalise_state,
-                                               eval_axes=eval_axes, log_compact=log_compact)
+                                               eval_axes=eval_axes, log_compact=log_compact,
+                                               log_coverage_set_only=log_coverage_set_only)
             # compute return
             for i in reversed(range(len(transitions) - 1)):
                 transitions[i].reward += gamma * transitions[i + 1].reward
@@ -293,6 +295,7 @@ def train_fair(env,
                normalise_state=False,
                use_wandb=True,
                log_compact=False,
+               log_coverage_set_only=False,
                ):
     step = 0
     if objectives == None:
@@ -309,16 +312,17 @@ def train_fair(env,
     pcn_logger = TrainingPCNLogger(objectives=all_obj)
     eval_logger = EvalLogger(objectives=all_obj)
 
-    # TODO: replace by list of timesteps and actions to recreate interactions?
     # agent_logger.create_file(agent_logger.path_eval_axes)
-    agent_logger.create_file(agent_logger.path_eval)
-    if not log_compact:
+    if not log_coverage_set_only:
+        agent_logger.create_file(agent_logger.path_eval)
+    if not (log_compact or log_coverage_set_only):
         agent_logger.create_file(agent_logger.path_train)
         agent_logger.create_file(agent_logger.path_experience)
 
     # leaves_logger.create_file(f"{logdir}/leaves_log.csv")
     pcn_logger.create_file(f"{logdir}/pcn_log.csv")
-    eval_logger.create_file(f"{logdir}/eval_log.csv")
+    if not log_coverage_set_only:
+        eval_logger.create_file(f"{logdir}/eval_log.csv")
     n_checkpoints = 0
 
     # fill buffer with random episodes
@@ -345,7 +349,7 @@ def train_fair(env,
                            next_obs if normalise_state else next_obs.to_array(), done))
             next_t = time.time()
 
-            if not log_compact:
+            if not (log_compact or log_coverage_set_only):
                 log_entries.append(agent_logger.create_entry(ep, step, obs, action, reward, done, info, next_t - curr_t,
                                                              status="e_replay"))
             curr_t = next_t
@@ -355,7 +359,7 @@ def train_fair(env,
         # add episode in-place
         print(f"Store episode {ep}, t {step}")
         add_episode(transitions, experience_replay, gamma=gamma, max_size=max_size, step=step)
-        if not log_compact:
+        if not (log_compact or log_coverage_set_only):
             agent_logger.write_data(log_entries, agent_logger.path_experience)
 
     del log_entries
@@ -363,9 +367,11 @@ def train_fair(env,
     # return  # TODO
     print("Training...")
     update_num = 0
+    print_update_interval = 5
 
     while step < total_steps:
-        print("loop", update_num)
+        if update_num % print_update_interval == 0:
+            print("loop", update_num)
 
         loss = []
         entropy = []
@@ -375,16 +381,9 @@ def train_fair(env,
             lp = lp
             ent = np.sum(-np.exp(lp) * lp)
             entropy.append(ent)
-        print("model updates", update_num)
 
         desired_return, desired_horizon = choose_commands(experience_replay, n_er_episodes, objectives)
 
-        # get all leaves, contain biggest elements, experience_replay got heapified in choose_commands
-        # print([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
-        # leaves = np.array([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
-        # e_lengths, e_returns = zip(*leaves)
-        # print([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
-        # leaves = np.array([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
         e_lengths, e_returns = [(len(e[2])) for e in experience_replay[len(experience_replay) // 2:]], \
                                [(e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]]
         e_lengths, e_returns = np.array(e_lengths), np.array(e_returns)
@@ -394,6 +393,14 @@ def train_fair(env,
                     logger.put('train/leaves', e_returns, step, f'{e_returns.shape[-1]}d')
                 else:
                     leaves = []
+                    # get all leaves, contain biggest elements, experience_replay got heapified in choose_commands
+                    # print([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
+                    # leaves = np.array([(len(e[2]), e[2][0].reward)
+                    #                    for e in experience_replay[len(experience_replay) // 2:]])
+                    # e_lengths, e_returns = zip(*leaves)
+                    # print([(len(e[2]), e[2][0].reward) for e in experience_replay[len(experience_replay) // 2:]])
+                    # leaves = np.array([(len(e[2]), e[2][0].reward)
+                    #                    for e in experience_replay[len(experience_replay) // 2:]])
                     # for er in e_returns:
                     #     leaves.append(leaves_logger.create_entry(ep, step, er))
                     # leaves_logger.write_data(leaves)
@@ -409,15 +416,15 @@ def train_fair(env,
         for _ in range(n_step_episodes):
             transitions = run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger,
                                                normalise_state=normalise_state, current_t=step, current_ep=ep,
-                                               log_compact=log_compact)
+                                               log_compact=log_compact, log_coverage_set_only=log_coverage_set_only)
             step += len(transitions)
             ep += 1
             add_episode(transitions, experience_replay, gamma=gamma, max_size=max_size, step=step)
             returns.append(transitions[0].reward)
             horizons.append(len(transitions))
 
-        print(f'step {step} \t return {np.mean(returns, axis=0)}, ({np.std(returns, axis=0)}) '
-              f'\t loss {np.mean(loss):.3E}')
+        print(f'step {step}/{int(total_steps)} ({round((step + 1) / total_steps * 100, 3)}%) '
+              f'\t return {np.mean(returns, axis=0)}, ({np.std(returns, axis=0)}) \t loss {np.mean(loss):.3E}')
 
         # compute hypervolume of leaves
         valid_e_returns = e_returns[np.all(e_returns[:, objectives] >= ref_point[objectives, ], axis=1)]
@@ -451,17 +458,18 @@ def train_fair(env,
 
             # compute e-metric
             epsilon = epsilon_metric(e_r[..., objectives].mean(axis=1), e_returns[..., objectives])
-            print('=' * 10, ' evaluation ', '=' * 10)
+            print('\n', '=' * 10, f' evaluation (t={step}) ', '=' * 10, sep='')
             for d, r in zip(e_returns, e_r):
                 print('desired: ', d, '\t', 'return: ', r.mean(0))
             print(f'epsilon max/mean: {epsilon.max():.3f} \t {epsilon.mean():.3f}')
-            print('=' * 22)
+            print('=' * 22, '\n', sep='')
 
-            entries = []
-            for d, r in zip(e_returns, e_r):
-                entry = eval_logger.create_entry(ep, step, epsilon.max(), epsilon.mean(), d, r.mean(0), "eval")
-                entries.append(entry)
-            eval_logger.write_data(entries)
+            if not (log_compact or log_coverage_set_only):
+                entries = []
+                for d, r in zip(e_returns, e_r):
+                    entry = eval_logger.create_entry(ep, step, epsilon.max(), epsilon.mean(), d, r.mean(0), "eval")
+                    entries.append(entry)
+                eval_logger.write_data(entries)
 
         update_num += 1
 
@@ -503,20 +511,27 @@ if __name__ == '__main__':
     # args.n_transactions = 200
     # args.fraud_proportion = 0.20
     #
-    # args.top_episodes = 25
-    # args.n_episodes = 25
+    args.top_episodes = 15
+    args.n_episodes = 15
     # args.er_size = 200
     # args.model_updates = 10
     #
     # args.objectives = ["R", "SP", "IF"]#, "IF", "IF"]
-    # args.compute_objectives = ["EO", "PP"]
-    # args.distance_metrics = ["braycurtis"]#, "HMOM", "HEOM"]
+    # args.compute_objectives = ["EO", "PP", "CSC"]
+    # args.distance_metrics = ["HMOM"] * 2
+    # args.distance_metrics = ["braycurtis", "HMOM"]#, "HEOM"]
+    args.steps = 5000
+    args.window = 1000
     # args.bias = 1
     # args.ignore_sensitive = True
     # args.log_compact = True
     # args.compute_individual = True
     # args.combined_sensitive_attributes = 0
     # args.log_dir = f"knn_graph{args.combined_sensitive_attributes}"
+    # args.log_coverage_set_only = True
+    args.discount_history = True
+    args.discount_factor = 0.95
+    args.discount_threshold = 1e-5
 
     print(args)
 
@@ -556,7 +571,8 @@ if __name__ == '__main__':
                logdir=logdir,
                normalise_state=True,
                use_wandb=arg_use_wandb,
-               log_compact=args.log_compact
+               log_compact=args.log_compact,
+               log_coverage_set_only=args.log_coverage_set_only,
                )
     # pr.print_stats(sort="cumulative")
 

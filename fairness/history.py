@@ -18,12 +18,13 @@ class History(object):
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
     """
     def __init__(self, env_actions, window=None, store_interactions=True, has_individual_fairness=True,
-                 store_state_array=lambda state: state):
+                 nearest_neighbours=None, store_state_array=lambda state: state):
         self.env_actions = env_actions
         self.window = window
         self.store_interactions = store_interactions
         self.has_individual_fairness = has_individual_fairness
         self.store_state_array = store_state_array
+        self.nearest_neighbours = nearest_neighbours
         self.CM = ConfusionMatrix(self.env_actions)
         self.t = 0
         self.features = None
@@ -66,10 +67,10 @@ class SlidingWindowHistory(History):
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
     """
     def __init__(self, env_actions, window=None, store_interactions=True, has_individual_fairness=True,
-                 store_state_array=lambda state: state):
+                 nearest_neighbours=None, store_state_array=lambda state: state):
         # Super call
         super(SlidingWindowHistory, self).__init__(env_actions, window, store_interactions, has_individual_fairness,
-                                                   store_state_array)
+                                                   nearest_neighbours, store_state_array)
         #
         self.confusion_matrices = {}
         #
@@ -82,8 +83,7 @@ class SlidingWindowHistory(History):
             self.ids = deque(maxlen=self.window)
             self.feature_values = {}
 
-    def update(self, episode, t, entities,
-               sensitive_attributes: List[SensitiveAttribute]):
+    def update(self, episode, t, entities, sensitive_attributes: List[SensitiveAttribute]):
         """Update the history with a newly observed tuple
 
         Args:
@@ -213,30 +213,33 @@ class DiscountedHistory(SlidingWindowHistory):
         env_actions: The actions taken in environment.
         discount_factor: (Optional) The discount factor to use for the history. Default: 1.0.
         discount_threshold: (Optional) The threshold to surpass to keep older interactions in the history.
+        discount_delay: (Optional) the number of timesteps to consider for the fairness notion to not fluctuate more
+            than discount_threshold, before deleting earlier timesteps
         store_interactions: (Optional) Store the full interactions instead of only the required information for
             fairness notions. Default: True.
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
     """
-    def __init__(self, env_actions, discount_factor=1.0, discount_threshold=1e-5,
-                 store_interactions=True, has_individual_fairness=True,
+    def __init__(self, env_actions, discount_factor=1.0, discount_threshold=1e-5, discount_delay=5,
+                 store_interactions=True, has_individual_fairness=True, nearest_neighbours=None,
                  store_state_array=lambda state: state):
         window = None
         # Super Call
-        super(DiscountedHistory, self).__init__(env_actions, window,
-                                                store_interactions, has_individual_fairness, store_state_array)
+        super(DiscountedHistory, self).__init__(env_actions, window, store_interactions, has_individual_fairness,
+                                                nearest_neighbours, store_state_array)
         #
         self.discount_factor = discount_factor
         self.discount_threshold = discount_threshold
+        self.discount_delay = discount_delay
 
 
 class HistoryTimestep(SlidingWindowHistory):
-    def __init__(self, env_actions, has_individual_fairness=True,
+    def __init__(self, env_actions, has_individual_fairness=True, nearest_neighbours=None,
                  store_state_array=lambda state: state):
         # Super call
         window = None
         store_interactions = True
         super(HistoryTimestep, self).__init__(env_actions, window, store_interactions, has_individual_fairness,
-                                              store_state_array)
+                                              nearest_neighbours, store_state_array)
 
     def update_t(self, episode, t, entities, sensitive_attributes: List[SensitiveAttribute]):
         self.t = t
