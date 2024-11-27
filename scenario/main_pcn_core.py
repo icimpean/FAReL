@@ -511,17 +511,18 @@ if __name__ == '__main__':
     # args.n_transactions = 200
     # args.fraud_proportion = 0.20
     #
-    args.top_episodes = 15
-    args.n_episodes = 15
+    # args.top_episodes = 15
+    # args.n_episodes = 15
     # args.er_size = 200
     # args.model_updates = 10
     #
     # args.objectives = ["R", "SP", "IF"]#, "IF", "IF"]
-    # args.compute_objectives = ["EO", "PP", "CSC"]
+    # args.objectives = "R,SP,IF"
+    # args.compute_objectives = ["EO"]
     # args.distance_metrics = ["HMOM"] * 2
     # args.distance_metrics = ["braycurtis", "HMOM"]#, "HEOM"]
-    args.steps = 5000
-    args.window = 1000
+    # args.steps = 5000
+    # args.window = 1000
     # args.bias = 1
     # args.ignore_sensitive = True
     # args.log_compact = True
@@ -529,9 +530,9 @@ if __name__ == '__main__':
     # args.combined_sensitive_attributes = 0
     # args.log_dir = f"knn_graph{args.combined_sensitive_attributes}"
     # args.log_coverage_set_only = True
-    args.discount_history = True
-    args.discount_factor = 0.95
-    args.discount_threshold = 1e-5
+    # args.discount_history = True
+    # args.discount_factor = 0.95
+    # args.discount_threshold = 1e-5
 
     print(args)
 

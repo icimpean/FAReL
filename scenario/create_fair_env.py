@@ -173,6 +173,11 @@ def create_fairness_framework_env(args):
 
     ALL_OBJECTIVES = ALL_REWARDS + ALL_GROUP_NOTIONS + ALL_INDIVIDUAL_NOTIONS
     sort_objectives = {o: i for i, o in enumerate(ALL_OBJECTIVES)}
+    # Check for concatenated arguments for objectives and compute objectives
+    if len(args.objectives) == 1 and "," in args.objectives[0]:
+        args.objectives = args.objectives[0].split(",")
+    if len(args.compute_objectives) == 1 and "," in args.compute_objectives[0]:
+        args.compute_objectives = args.compute_objectives[0].split(",")
     all_args_objectives = args.objectives + args.compute_objectives
     ordered_objectives = sorted(all_args_objectives,
                                 key=lambda o: sort_objectives[get_objective(OBJECTIVES_MAPPING[o])])
@@ -281,10 +286,13 @@ fMDP_parser = argparse.ArgumentParser(description='fMDP_parser', add_help=False)
 #
 fMDP_parser.add_argument('--objectives', default=['R', 'SP'],
                          type=str, nargs='+', help='Abbreviations of the fairness notions to optimise, one or more of: '
-                                                   f'{parser_all_objectives}')
+                                                   f'{parser_all_objectives}. Can be supplied as a single string, with'
+                                                   f'the arguments separated by a comma, e.g., "R,SP"')
 fMDP_parser.add_argument('--compute_objectives', default=['EO', 'OAE', 'PP', 'IF', 'CSC'],
                          type=str, nargs='*', help='Abbreviations of the fairness notions to compute, '
-                                                   f'in addition to the ones being optimised: {parser_all_objectives}')
+                                                   f'in addition to the ones being optimised: {parser_all_objectives}'
+                                                   f' Can be supplied as a single string, with the arguments separated '
+                                                   f'by a comma, e.g., "EO,OAE,PP,IF,CSC"')
 #
 fMDP_parser.add_argument('--env', default='job', type=str, help='job or fraud')
 #
