@@ -174,14 +174,25 @@ def create_fairness_framework_env(args):
     ALL_OBJECTIVES = ALL_REWARDS + ALL_GROUP_NOTIONS + ALL_INDIVIDUAL_NOTIONS
     sort_objectives = {o: i for i, o in enumerate(ALL_OBJECTIVES)}
     # Check for concatenated arguments for objectives and compute objectives
-    if len(args.objectives) == 1 and ":" in args.objectives[0]:
-        args.objectives = args.objectives[0].split(":")
-    if len(args.compute_objectives) == 1 and ":" in args.compute_objectives[0]:
-        args.compute_objectives = args.compute_objectives[0].split(":")
+    _sep = ":"
+    if len(args.objectives) == 1 and _sep in args.objectives[0]:
+        args.objectives = args.objectives[0].split(_sep)
+    if len(args.compute_objectives) == 1 and _sep in args.compute_objectives[0]:
+        args.compute_objectives = args.compute_objectives[0].split(_sep)
     all_args_objectives = args.objectives + args.compute_objectives
     ordered_objectives = sorted(all_args_objectives,
                                 key=lambda o: sort_objectives[get_objective(OBJECTIVES_MAPPING[o])])
     args.objectives = [i for i, o in enumerate(ordered_objectives) if o in args.objectives]
+    # Check for concatenated distance metrics
+    ind_notions = [n for n in all_args_objectives if isinstance(get_objective(OBJECTIVES_MAPPING[n]), IndividualNotion)]
+    if len(args.distance_metrics) == 1:
+        if _sep in args.distance_metrics[0]:
+            args.distance_metrics = args.distance_metrics[0].split(_sep)
+            dist_metrics = [(n, d) for n, d in zip(ind_notions, args.distance_metrics)]
+            dist_metrics = sorted(dist_metrics, key=lambda x: sort_objectives[get_objective(OBJECTIVES_MAPPING[x[0]])])
+            args.distance_metrics = [d for (n, d) in dist_metrics]
+        else:
+            args.distance_metrics = args.distance_metrics * len(ind_notions)
 
     mapped_ordered_notions = [OBJECTIVES_MAPPING[n] for n in ordered_objectives]
     all_group_notions = [n for n in mapped_ordered_notions if isinstance(n, GroupNotion)]
@@ -333,7 +344,8 @@ fMDP_parser.add_argument('--no_individual', default=0, type=int, help="No indivi
 fMDP_parser.add_argument('--distance_metrics', default=['braycurtis'], type=str, nargs='*',
                          help='The distance metric to use for every individual fairness notion specified. '
                               'The distance metrics should be supplied for each individual fairness in the objectives, '
-                              'then followed by computed objectives.')
+                              'then followed by computed objectives. Can be supplied as a single string, with the '
+                              'arguments separated by a colon, e.g., "braycurtis:HEOM"')
 #
 fMDP_parser.add_argument('--combined_sensitive_attributes', default=0, type=int,
                          help='Use a combination of sensitive attributes to compute fairness notions')
