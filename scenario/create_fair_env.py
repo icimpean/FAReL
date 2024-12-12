@@ -24,6 +24,62 @@ from scenario.job_hiring.env import HiringActions, JobHiringEnv
 from scenario.parameter_setup import VSC_SAVE_DIR, device
 
 
+#
+Reward = "Reward"
+ALL_REWARDS = [Reward]
+#
+ALL_OBJECTIVES = ALL_REWARDS + ALL_GROUP_NOTIONS + ALL_INDIVIDUAL_NOTIONS
+SORTED_OBJECTIVES = {o: i for i, o in enumerate(ALL_OBJECTIVES)}
+
+#
+OBJECTIVES_MAPPING = {
+    # Rewards
+    "R": Reward,
+    # Group notions (over history)
+    "SP": GroupNotion.StatisticalParity,
+    "EO": GroupNotion.EqualOpportunity,
+    "OAE": GroupNotion.OverallAccuracyEquality,
+    "PP": GroupNotion.PredictiveParity,
+    "PE": GroupNotion.PredictiveEquality,
+    "EqOdds": GroupNotion.EqualizedOdds,
+    "CUAE": GroupNotion.ConditionalUseAccuracyEquality,
+    "TE": GroupNotion.TreatmentEquality,
+    # Group notions (over timestep)
+    "SP_t": GroupNotion.StatisticalParity_t,
+    "EO_t": GroupNotion.EqualOpportunity_t,
+    "OAE_t": GroupNotion.OverallAccuracyEquality_t,
+    "PP_t": GroupNotion.PredictiveParity_t,
+    "PE_t": GroupNotion.PredictiveEquality_t,
+    "EqOdds_t": GroupNotion.EqualizedOdds_t,
+    "CUAE_t": GroupNotion.ConditionalUseAccuracyEquality_t,
+    "TE_t": GroupNotion.TreatmentEquality_t,
+    # Individual notions (over history)
+    "IF": IndividualNotion.IndividualFairness,
+    "CSC": IndividualNotion.ConsistencyScoreComplement,
+    "CSC_inn": IndividualNotion.ConsistencyScoreComplement_INN,
+    # Individual notions (over timestep)
+    "IF_t": IndividualNotion.IndividualFairness_t,
+    # TODO: include
+    # "CSC_t": IndividualNotion.ConsistencyScoreComplement_t,
+    # "CSC_inn_t": IndividualNotion.ConsistencyScoreComplement_INN_t,
+}
+OBJECTIVES_MAPPING_r = {v: k for k, v in OBJECTIVES_MAPPING.items()}
+parser_all_objectives = ", ".join([f"{v if isinstance(v, str) else v.name} ({k})"
+                                   for k, v in OBJECTIVES_MAPPING.items()])
+
+
+def get_objective(obj):
+    try:
+        return GroupNotion[obj]
+    except KeyError:
+        pass
+    try:
+        return IndividualNotion[obj]
+    except KeyError:
+        pass
+    return obj
+
+
 def create_job_env(args):
     team_size = args.team_size
     episode_length = args.episode_length
@@ -171,8 +227,6 @@ def create_fairness_framework_env(args):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    ALL_OBJECTIVES = ALL_REWARDS + ALL_GROUP_NOTIONS + ALL_INDIVIDUAL_NOTIONS
-    sort_objectives = {o: i for i, o in enumerate(ALL_OBJECTIVES)}
     # Check for concatenated arguments for objectives and compute objectives
     _sep = ":"
     if len(args.objectives) == 1 and _sep in args.objectives[0]:
@@ -181,7 +235,7 @@ def create_fairness_framework_env(args):
         args.compute_objectives = args.compute_objectives[0].split(_sep)
     all_args_objectives = args.objectives + args.compute_objectives
     ordered_objectives = sorted(all_args_objectives,
-                                key=lambda o: sort_objectives[get_objective(OBJECTIVES_MAPPING[o])])
+                                key=lambda o: SORTED_OBJECTIVES[get_objective(OBJECTIVES_MAPPING[o])])
     args.objectives = [i for i, o in enumerate(ordered_objectives) if o in args.objectives]
     # Check for concatenated distance metrics
     ind_notions = [n for n in all_args_objectives if isinstance(get_objective(OBJECTIVES_MAPPING[n]), IndividualNotion)]
@@ -189,7 +243,7 @@ def create_fairness_framework_env(args):
         if _sep in args.distance_metrics[0]:
             args.distance_metrics = args.distance_metrics[0].split(_sep)
             dist_metrics = [(n, d) for n, d in zip(ind_notions, args.distance_metrics)]
-            dist_metrics = sorted(dist_metrics, key=lambda x: sort_objectives[get_objective(OBJECTIVES_MAPPING[x[0]])])
+            dist_metrics = sorted(dist_metrics, key=lambda x: SORTED_OBJECTIVES[get_objective(OBJECTIVES_MAPPING[x[0]])])
             args.distance_metrics = [d for (n, d) in dist_metrics]
         else:
             args.distance_metrics = args.distance_metrics * len(ind_notions)
@@ -239,58 +293,6 @@ def create_fairness_framework_env(args):
     env.scale = scale
 
     return env, logdir, ref_point, scaling_factor, max_return
-
-
-#
-Reward = "Reward"
-ALL_REWARDS = [Reward]
-#
-OBJECTIVES_MAPPING = {
-    # Rewards
-    "R": Reward,
-    # Group notions (over history)
-    "SP": GroupNotion.StatisticalParity,
-    "EO": GroupNotion.EqualOpportunity,
-    "OAE": GroupNotion.OverallAccuracyEquality,
-    "PP": GroupNotion.PredictiveParity,
-    "PE": GroupNotion.PredictiveEquality,
-    "EqOdds": GroupNotion.EqualizedOdds,
-    "CUAE": GroupNotion.ConditionalUseAccuracyEquality,
-    "TE": GroupNotion.TreatmentEquality,
-    # Group notions (over timestep)
-    "SP_t": GroupNotion.StatisticalParity_t,
-    "EO_t": GroupNotion.EqualOpportunity_t,
-    "OAE_t": GroupNotion.OverallAccuracyEquality_t,
-    "PP_t": GroupNotion.PredictiveParity_t,
-    "PE_t": GroupNotion.PredictiveEquality_t,
-    "EqOdds_t": GroupNotion.EqualizedOdds_t,
-    "CUAE_t": GroupNotion.ConditionalUseAccuracyEquality_t,
-    "TE_t": GroupNotion.TreatmentEquality_t,
-    # Individual notions (over history)
-    "IF": IndividualNotion.IndividualFairness,
-    "CSC": IndividualNotion.ConsistencyScoreComplement,
-    "CSC_inn": IndividualNotion.ConsistencyScoreComplement_INN,
-    # Individual notions (over timestep)
-    "IF_t": IndividualNotion.IndividualFairness_t,
-    # TODO: include
-    # "CSC_t": IndividualNotion.ConsistencyScoreComplement_t,
-    # "CSC_inn_t": IndividualNotion.ConsistencyScoreComplement_INN_t,
-}
-OBJECTIVES_MAPPING_r = {v: k for k, v in OBJECTIVES_MAPPING.items()}
-parser_all_objectives = ", ".join([f"{v if isinstance(v, str) else v.name} ({k})"
-                                   for k, v in OBJECTIVES_MAPPING.items()])
-
-
-def get_objective(obj):
-    try:
-        return GroupNotion[obj]
-    except KeyError:
-        pass
-    try:
-        return IndividualNotion[obj]
-    except KeyError:
-        pass
-    return obj
 
 
 fMDP_parser = argparse.ArgumentParser(description='fMDP_parser', add_help=False)
