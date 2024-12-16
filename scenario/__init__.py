@@ -305,27 +305,17 @@ class Scenario(object):
 
         # Heterogeneous Euclidean-Overlap Metric (HEOM)
         if distance == 'HEOM':
-            # d = np.sum(np.abs(num1 - num2)) + np.sum(nom1 != nom2)
-            d = sum(np.abs(num1 - num2)) + sum(nom1 != nom2)
-        # Heterogeneous Manhattan-Overlap Metric (HMOM)
-        elif distance == 'HMOM':
-            # d = np.sum((num1 - num2) ** 2) + np.sum(nom1 != nom2)
             diff = (num1 - num2)
             d = sum(diff * diff) + sum(nom1 != nom2)
+        # Heterogeneous Manhattan-Overlap Metric (HMOM)
+        elif distance == 'HMOM':
+            d = sum(np.abs(num1 - num2)) + sum(nom1 != nom2)
         else:
             raise ValueError(f"Expected distance: HEOM or HMOM. Got: {distance}")
         return np.exp(-alpha * d) if exp else d
 
     def minkowski_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                          p=2, w=None):
-        # Normalise if it hasn't happened yet
-        # if isinstance(state1, CombinedState):
-        #     norm1 = self._normalise_features(state1, indices=self.indices_i)
-        #     norm2 = self._normalise_features(state2, indices=self.indices_i)
-        # else:
-        #     norm1 = state1[self.indices_i]
-        #     norm2 = state2[self.indices_i]
-        # return minkowski(norm1, norm2, p=p, w=w)
         try:
             norm1 = state1[self.indices_i]
             norm2 = state2[self.indices_i]
@@ -352,13 +342,6 @@ class Scenario(object):
 
     def braycurtis_metric(self, state1: Union[CombinedState, np.ndarray], state2: Union[CombinedState, np.ndarray],
                           w=None):
-        # Normalise if it hasn't happened yet
-        # if isinstance(state1, CombinedState):
-        #     norm1 = self._normalise_features(state1, indices=self.indices_i)
-        #     norm2 = self._normalise_features(state2, indices=self.indices_i)
-        # else:
-        #     norm1 = state1[self.indices_i]
-        #     norm2 = state2[self.indices_i]
         try:
             norm1 = state1[self.indices_i]
             norm2 = state2[self.indices_i]
