@@ -225,7 +225,7 @@ class TransactionModelMDP(Scenario):
 
         # Add bias
         for bias in self.reward_biases:
-            self.reward += bias.get_bias(self.state)
+            reward += bias.get_bias(self.state)
 
         if customer.fraudster:
             self.transaction_model.fraudulent_transactions += 1
