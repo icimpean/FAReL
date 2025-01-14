@@ -261,8 +261,11 @@ class IndividualFairness(IndividualFairnessBase):
                             # Remove all individuals before the given range
                             print(f"*** discarding {j}/{m} (remove_delay {remove_delay}), diff: {disc_diff}", end="\t")
                             print(f"previous_window_size: {len(self._individual_last_window[distance_metric])}", end="\t")
+                            hs = history.get_history()
                             for k in range(j - 1, -1, -1):
                                 self._individual_last_window[distance_metric].popleft()
+                                for h in hs:
+                                    h.popleft()
                                 # TODO: How/When to remove corresponding interactions in history? (Check usage of other notions)
                             print(f"new_window_size: {len(self._individual_last_window[distance_metric])}")
                             # Stop considering older encounters of individuals
