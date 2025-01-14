@@ -262,6 +262,7 @@ def create_fairness_framework_env(args):
                                            discount_factor=args.discount_factor if args.discount_history else None,
                                            discount_threshold=args.discount_threshold if args.discount_history else None,
                                            discount_delay=args.discount_delay if args.discount_history else None,
+                                           min_window=args.min_window,
                                            nearest_neighbours=args.nearest_neighbours,
                                            inn_sensitive_features=None,
                                            # inn_sensitive_features=[HiringFeature.gender.value],  # TODO
@@ -336,6 +337,7 @@ fMDP_parser.add_argument('--discount_threshold', default=1e-5, type=float,
 fMDP_parser.add_argument('--discount_delay', default=5, type=int,
                          help='the number of timesteps to consider for the fairness notion to not fluctuate more than '
                               'discount_threshold, before deleting earlier timesteps')
+fMDP_parser.add_argument('--min_window', default=100, type=int, help='minimum window size for discounted history')
 fMDP_parser.add_argument('--nearest_neighbours', default=5, type=int,
                          help='the number of neighbours to consider for individual fairness notions based on CSC')
 fMDP_parser.add_argument('--fair_alpha', default=0.1, type=float, help='fairness framework alpha for similarity metric')

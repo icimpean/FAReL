@@ -79,18 +79,6 @@ def _pool_weakly_meritocratic(args):
     return i, is_fair, max_diff
 
 
-def _pool_weakly_meritocratic_knn(args):
-    i, states, actions, q_values, nearest_neighours = args
-    is_fair = True
-    max_diff = 0
-
-    # TODO:
-    for cluster in ...:
-        pass
-
-    return i, is_fair, max_diff
-
-
 class IndividualFairness(IndividualFairnessBase):
     """A collection of fairness notions w.r.t. individuals.
 
@@ -254,32 +242,34 @@ class IndividualFairness(IndividualFairnessBase):
             total_comparisons = 0
             t = 0
             remove_delay = 0
-            for j in range(m - 1 - 1, -1, -1):
-                diffs_j = self._individual_last_window[distance_metric][j][0]
-                new_total = total + np.nansum(diffs_j) * (history.discount_factor ** t)
-                new_total_comparisons = total_comparisons + len(diffs_j) * (history.discount_factor ** t)
-                t += 1
+            # Only remove interactions if over min_window are present
+            if m > history.min_window:
+                for j in range(m - 1 - 1, -1, -1):
+                    diffs_j = self._individual_last_window[distance_metric][j][0]
+                    new_total = total + np.nansum(diffs_j) * (history.discount_factor ** t)
+                    new_total_comparisons = total_comparisons + len(diffs_j) * (history.discount_factor ** t)
+                    t += 1
 
-                # Check if difference is large enough
-                # noinspection PyUnresolvedReferences
-                disc_diff = abs(total / max(1, total_comparisons) - new_total / new_total_comparisons)
-                if disc_diff <= history.discount_threshold:
-                    remove_delay += 1
-                    # Wait for comparisons of at least discount_delay consecutive individuals in the history
-                    # to not pass the threshold
-                    if (j > 0) and (remove_delay > history.discount_delay):
-                        # Remove all individuals before the given range
-                        print(f"*** discarding {j}/{m} (remove_delay {remove_delay}), diff: {disc_diff}", end="\t")
-                        print(f"previous_window_size: {len(self._individual_last_window[distance_metric])}", end="\t")
-                        for k in range(j - 1, -1, -1):
-                            self._individual_last_window[distance_metric].popleft()
-                            # TODO: How/When to remove corresponding interactions in history? (Check usage of other notions)
-                        print(f"new_window_size: {len(self._individual_last_window[distance_metric])}")
-                        # Stop considering older encounters of individuals
-                        break
+                    # Check if difference is large enough
+                    # noinspection PyUnresolvedReferences
+                    disc_diff = abs(total / max(1, total_comparisons) - new_total / new_total_comparisons)
+                    if disc_diff <= history.discount_threshold:
+                        remove_delay += 1
+                        # Wait for comparisons of at least discount_delay consecutive individuals in the history
+                        # to not pass the threshold
+                        if (j > 0) and (remove_delay > history.discount_delay):
+                            # Remove all individuals before the given range
+                            print(f"*** discarding {j}/{m} (remove_delay {remove_delay}), diff: {disc_diff}", end="\t")
+                            print(f"previous_window_size: {len(self._individual_last_window[distance_metric])}", end="\t")
+                            for k in range(j - 1, -1, -1):
+                                self._individual_last_window[distance_metric].popleft()
+                                # TODO: How/When to remove corresponding interactions in history? (Check usage of other notions)
+                            print(f"new_window_size: {len(self._individual_last_window[distance_metric])}")
+                            # Stop considering older encounters of individuals
+                            break
 
-                total = new_total
-                total_comparisons = new_total_comparisons
+                    total = new_total
+                    total_comparisons = new_total_comparisons
 
         if exact:
             approx = True

@@ -86,7 +86,7 @@ def get_splits(env_name, populations, distances, windows, biases, requested_obje
 
     plot_single_objective = all([len(o) == 1 for o in requested_objectives])
     split_per_objective = plot_single_objective or not any([split_per_population, split_per_bias,
-                                                             split_per_distance, split_per_window])
+                                                            split_per_distance, split_per_window])
     plot_legend_as_subtitles = True
     skip_subtitle = False
 

@@ -12,7 +12,7 @@ if __name__ == '__main__':
     processes = 4  # The number of cores to use when computing the representative sets for high policy counts
     chunk_size = 64  # The chunk size to use when computing the representative sets for high policy counts
 
-    base_results_dir = "/Users/alexandracimpean/Desktop/VSC_Fairness/Nov2024/"
+    base_results_dir = "/Users/alexandracimpean/Desktop/VSC_Fairness/Nov2024_core/"
     # Only consider these objectives and (plotting) parameters for plotting and retrieving data
     reduced_objectives = ["R", "SP", "EO", "PE", "OAE", "PP", "IF", "CSC"]
     OBJECTIVES_MAPPING = {env_OBJ_MAP_r[objective]: (objective.name if isinstance(objective, Enum) else objective)
@@ -38,12 +38,17 @@ if __name__ == '__main__':
     #
     get_representative_subset = True
     plot_all = True
+    print_repr_policies_table = True
+    plot_policies_different_colours = False
+    plot_dashed_lines = False
+    #
+    plot_policies_different_colours = True
+    plot_dashed_lines = True
 
     #
     is_fraud = True
     is_fraud = False
     seeds = range(10)  # TODO 10
-    # requested_objectives = [["R", "SP", "IF"]]
     # Single objective
     # requested_objectives = [["R"], ["SP"], ["IF"], ["EO"], ["PE"], ["PP"], ["OAE"], ["CSC"]]
     # R_Group_Ind
@@ -57,7 +62,7 @@ if __name__ == '__main__':
     # Different distance metrics    
     # requested_objectives = [["R", "SP"]]
     # computed_objectives = [["EO", "PE", "OAE", "PP", "IF", "IF", "IF", "CSC", "CSC", "CSC"]]
-    # all_objectives = ["R", "SP", "EO", "PE", "OAE", "PP", "IF_braycurtis", "IF_HMOM", "IF_HEOM", "CSC_braycurtis", "CSC_HMOM", "CSC_HEOM"]
+    # all_objectives = ["R", "SP", "EO", "PE", "OAE", "PP", "IF_braycurtis", "IF_HEOM", "IF_HMOM", "CSC_braycurtis", "CSC_HEOM", "CSC_HMOM"]
     #
     # Different distance metrics
     # requested_objectives = [["R", "SP", "IF", "IF", "IF"]]
@@ -71,15 +76,15 @@ if __name__ == '__main__':
 
     #
     populations = {
-        # "belgian_population": "default",
+        "belgian_population": "default",
         # "belgian_pop_diff_dist_gen": "gender",
-        "belgian_pop_diff_dist_nat_gen": "nationality-gender",
+        # "belgian_pop_diff_dist_nat_gen": "nationality-gender",
     }
     distances = {d: d for d in [
             # "braycurtis",
-            "HMOM",
-            # "HEOM"
-            # "braycurtis:HMOM:HEOM:braycurtis:HMOM:HEOM"
+            # "HMOM",
+            "HEOM"
+            # "braycurtis:HEOM:HMOM:braycurtis:HEOM:HMOM"
             # "braycurtis:HMOM:HEOM"
         ]}
     windows = {w: f"window_{w}" for w in [
@@ -89,11 +94,18 @@ if __name__ == '__main__':
             # 1000,
             # "500_discount"
         ]}
-    biases = {
-        0: "default",
-        1: "+0.1 men",
-        2: "+0.1 <country> men",
-    }
+    if is_fraud:
+        biases = {
+            0: "default",
+            # 1: r"$+0.1 C_a$",
+            # 2: r"$+0.1 C_a merchant_0$",
+        }
+    else:
+        biases = {
+            0: "default",
+            # 1: "+0.1 men",
+            # 2: "+0.1 <country> men",
+        }
 
     env_name = "fraud_detection" if is_fraud else "job_hiring"
     s_prefix = "s_" if scaled else ""
@@ -125,4 +137,5 @@ if __name__ == '__main__':
     plot_radar(requested_objectives, all_objectives, sorted_objectives, iter_over, col_name, full_df, pcn_idx,
                get_representative_subset, polar_range, seeds, processes, chunk_size, save_dir, file_name,
                split_per_objective, split_per_bias, split_per_distance, split_per_window, split_per_population,
-               skip_subtitle, plot_all, plot_legend_as_subtitles, plot_single_objective)
+               skip_subtitle, plot_all, plot_legend_as_subtitles, plot_single_objective,
+               env_name, print_repr_policies_table, plot_policies_different_colours, plot_dashed_lines)

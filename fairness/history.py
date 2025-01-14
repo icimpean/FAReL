@@ -215,11 +215,13 @@ class DiscountedHistory(SlidingWindowHistory):
         discount_threshold: (Optional) The threshold to surpass to keep older interactions in the history.
         discount_delay: (Optional) the number of timesteps to consider for the fairness notion to not fluctuate more
             than discount_threshold, before deleting earlier timesteps
+        min_window: (Optional) The minimum window size to keep.
         store_interactions: (Optional) Store the full interactions instead of only the required information for
             fairness notions. Default: True.
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
     """
     def __init__(self, env_actions, discount_factor=1.0, discount_threshold=1e-5, discount_delay=5,
+                 min_window=100,
                  store_interactions=True, has_individual_fairness=True, nearest_neighbours=None,
                  store_state_array=lambda state: state):
         window = None
@@ -230,6 +232,7 @@ class DiscountedHistory(SlidingWindowHistory):
         self.discount_factor = discount_factor
         self.discount_threshold = discount_threshold
         self.discount_delay = discount_delay
+        self.min_window = min_window
 
 
 class HistoryTimestep(SlidingWindowHistory):

@@ -3,10 +3,10 @@ from typing import Union, List, Iterable
 import gymnasium as gym
 
 from fairness import SensitiveAttribute
-from fairness.group import GroupNotion, ALL_GROUP_NOTIONS, TIMESTEP_GROUP_NOTIONS
+from fairness.group import GroupNotion, TIMESTEP_GROUP_NOTIONS
 from fairness.group.group_fairness import GroupFairness
 from fairness.history import History, SlidingWindowHistory, DiscountedHistory, HistoryTimestep
-from fairness.individual import ALL_INDIVIDUAL_NOTIONS, IndividualNotion, TIMESTEP_INDIVIDUAL_NOTIONS
+from fairness.individual import IndividualNotion, TIMESTEP_INDIVIDUAL_NOTIONS
 from fairness.individual.individual_fairness import IndividualFairness
 from scenario import CombinedState
 
@@ -30,7 +30,7 @@ class FairnessFramework(object):
                  distance_metrics=[], alpha=None,
                  group_notions=None, individual_notions=None, window=None,
                  store_interactions=True, has_individual_fairness=True,
-                 discount_factor=None, discount_threshold=None, discount_delay=None,
+                 discount_factor=None, discount_threshold=None, discount_delay=None, min_window=None,
                  nearest_neighbours=None,
                  inn_sensitive_features=None, seed=None, steps=None):
         self.actions = actions
@@ -40,12 +40,13 @@ class FairnessFramework(object):
         self.discount_factor = discount_factor
         self.discount_threshold = discount_threshold
         self.discount_delay = discount_delay
+        self.min_window = min_window
         self.nearest_neighbours = nearest_neighbours
         # Use a discounted history
         if discount_factor is not None:
             self.history = DiscountedHistory(actions,
                                              self.discount_factor, self.discount_threshold, self.discount_delay,
-                                             store_interactions=self.store_interactions,
+                                             self.min_window, store_interactions=self.store_interactions,
                                              has_individual_fairness=self.has_individual_fairness,
                                              nearest_neighbours=self.nearest_neighbours)
         # Use a sliding window history
