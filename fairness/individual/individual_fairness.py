@@ -122,6 +122,7 @@ class IndividualFairness(IndividualFairnessBase):
         # noinspection PyArgumentList
         return self._map[notion](history, threshold, similarity_metric, alpha, distance_metric)
 
+    # noinspection PyUnresolvedReferences
     def individual_fairness(self, history: History, threshold=None, similarity_metric=None, alpha=1.0,
                             distance_metric=("braycurtis", "braycurtis")):
         """Let i and j be two individuals represented by their attributes values vectors v_i and v_j.
@@ -224,8 +225,6 @@ class IndividualFairness(IndividualFairnessBase):
                     self._individual_last_window[distance_metric][shifted_j][1].popleft()
                 self._individual_last_window[distance_metric][shifted_j][1].append(
                     (d, shifted_i, diff, actions[shifted_i], actions[shifted_j]))
-                # if i > 130:
-                #     print("i, len", i, len(self._individual_last_window[distance_metric]), shifted_i)
                 self._individual_last_window[distance_metric][shifted_i][1].append(
                     (d, shifted_j, diff, actions[shifted_j], actions[shifted_i]))
                 # Exact fair
@@ -242,37 +241,32 @@ class IndividualFairness(IndividualFairnessBase):
             total_comparisons = 0
             t = 0
             remove_delay = 0
-            # Only remove interactions if over min_window are present
-            if m > history.min_window:
-                for j in range(m - 1 - 1, -1, -1):
-                    diffs_j = self._individual_last_window[distance_metric][j][0]
-                    new_total = total + np.nansum(diffs_j) * (history.discount_factor ** t)
-                    new_total_comparisons = total_comparisons + len(diffs_j) * (history.discount_factor ** t)
-                    t += 1
+            # Only remove interactions if over min_window are present after removal
+            for j in range(m - history.min_window + history.discount_delay - 1, -1, -1):
+                diffs_j = self._individual_last_window[distance_metric][j][0]
+                new_total = total + np.nansum(diffs_j) * (history.discount_factor ** t)
+                new_total_comparisons = total_comparisons + len(diffs_j) * (history.discount_factor ** t)
+                t += 1
 
-                    # Check if difference is large enough
-                    # noinspection PyUnresolvedReferences
-                    disc_diff = abs(total / max(1, total_comparisons) - new_total / new_total_comparisons)
-                    if disc_diff <= history.discount_threshold:
-                        remove_delay += 1
-                        # Wait for comparisons of at least discount_delay consecutive individuals in the history
-                        # to not pass the threshold
-                        if (j > 0) and (remove_delay > history.discount_delay):
-                            # Remove all individuals before the given range
-                            print(f"*** discarding {j}/{m} (remove_delay {remove_delay}), diff: {disc_diff}", end="\t")
-                            print(f"previous_window_size: {len(self._individual_last_window[distance_metric])}", end="\t")
-                            hs = history.get_history()
-                            for k in range(j - 1, -1, -1):
-                                self._individual_last_window[distance_metric].popleft()
-                                for h in hs:
-                                    h.popleft()
-                                # TODO: How/When to remove corresponding interactions in history? (Check usage of other notions)
-                            print(f"new_window_size: {len(self._individual_last_window[distance_metric])}")
-                            # Stop considering older encounters of individuals
-                            break
-
-                    total = new_total
-                    total_comparisons = new_total_comparisons
+                # Check if difference is large enough
+                # noinspection PyUnresolvedReferences
+                disc_diff = abs(total / max(1, total_comparisons) - new_total / new_total_comparisons)
+                total = new_total
+                total_comparisons = new_total_comparisons
+                if disc_diff <= history.discount_threshold:
+                    remove_delay += 1
+                    # Wait for comparisons of at least discount_delay consecutive individuals in the history
+                    # to not pass the threshold
+                    if remove_delay > history.discount_delay:
+                        # Remove all individuals before the given range
+                        # print(f"*** discarding {j+1}/{m} (remove_delay {remove_delay}), diff: {disc_diff}", end="\t")
+                        # print(f"previous_window_size: {len(self._individual_last_window[distance_metric])}", end="\t")
+                        for k in range(j + 1):
+                            self._individual_last_window[distance_metric].popleft()
+                        history.remove_oldest_interactions(n=j + 1, difference=disc_diff)
+                        # print(f"new_window_size: {len(self._individual_last_window[distance_metric])}")
+                        # Stop considering older encounters of individuals
+                        break
 
         if exact:
             approx = True

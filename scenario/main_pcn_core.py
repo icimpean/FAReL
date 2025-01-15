@@ -9,7 +9,7 @@ from agent.pcn.pcn_core import epsilon_metric, non_dominated, compute_hypervolum
 from agent.pcn.logger import Logger
 from create_fair_env import *
 from fairness.fairness_framework import ExtendedfMDP
-from loggers.logger import AgentLogger, LeavesLogger, TrainingPCNLogger, EvalLogger
+from loggers.logger import AgentLogger, LeavesLogger, TrainingPCNLogger, EvalLogger, DiscountHistoryLogger
 from scenario.fraud_detection.env import NUM_FRAUD_FEATURES
 from scenario.job_hiring.env import NUM_JOB_HIRING_FEATURES
 
@@ -118,8 +118,8 @@ class DiscreteHead(nn.Module):
         return x
 
 
-def run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger, current_ep, current_t,
-                         eval=False, normalise_state=False, eval_axes=False,
+def run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger, discount_history_logger,
+                         current_ep, current_t, eval=False, normalise_state=False, eval_axes=False,
                          log_compact=False, log_coverage_set_only=False):
     curr_t = time.time()
     transitions = []
@@ -127,6 +127,8 @@ def run_episode_fairness(env, model, desired_return, desired_horizon, max_return
     done = False
     t = current_t
     log_entries = []
+    history_entries = []
+
     if eval and eval_axes:
         path = agent_logger.path_eval_axes
         status = "eval_axes"
@@ -164,23 +166,32 @@ def run_episode_fairness(env, model, desired_return, desired_horizon, max_return
             log_entries.append(
                 agent_logger.create_entry(current_ep, t, obs, action, reward, done, info, next_t - curr_t,
                                           status))
+        if discount_history_logger:
+            history_entries.append(discount_history_logger.create_entry(current_ep, t,
+                                                                        env.fairness_framework.history.get_size(),
+                                                                        env.fairness_framework.history.difference,
+                                                                        env.fairness_framework.history.prev_size,
+                                                                        next_t - curr_t, status=status))
         curr_t = next_t
         t += 1
 
     if eval or not (log_compact or log_coverage_set_only):
         agent_logger.write_data(log_entries, path)
+    if discount_history_logger:
+        discount_history_logger.write_data(history_entries)
     return transitions
 
 
-def eval_(env, model, coverage_set, horizons, max_return, agent_logger, current_ep, current_t, gamma=1., n=10,
-          normalise_state=False, eval_axes=False, log_compact=False, log_coverage_set_only=False):
+def eval_(env, model, coverage_set, horizons, max_return, agent_logger, discount_history_logger, current_ep, current_t,
+          gamma=1., n=10, normalise_state=False, eval_axes=False, log_compact=False, log_coverage_set_only=False):
     e_returns = np.empty((coverage_set.shape[0], n, coverage_set.shape[-1]))
     all_transitions = []
     for e_i, target_return, horizon in zip(np.arange(len(coverage_set)), coverage_set, horizons):
         n_transitions = []
         for n_i in range(n):
             transitions = run_episode_fairness(env, model, target_return, np.float32(horizon), max_return, agent_logger,
-                                               current_ep, current_t, eval=True, normalise_state=normalise_state,
+                                               discount_history_logger, current_ep, current_t,
+                                               eval=True, normalise_state=normalise_state,
                                                eval_axes=eval_axes, log_compact=log_compact,
                                                log_coverage_set_only=log_coverage_set_only)
             # compute return
@@ -311,6 +322,8 @@ def train_fair(env,
     all_obj = [i for i in range(len(ref_point))]
     pcn_logger = TrainingPCNLogger(objectives=all_obj)
     eval_logger = EvalLogger(objectives=all_obj)
+    discount_history_logger = DiscountHistoryLogger() if env.fairness_framework.discount_factor else None
+    env.fairness_framework.history.logger = discount_history_logger
 
     # agent_logger.create_file(agent_logger.path_eval_axes)
     if not log_coverage_set_only:
@@ -323,6 +336,8 @@ def train_fair(env,
     pcn_logger.create_file(f"{logdir}/pcn_log.csv")
     if not log_coverage_set_only:
         eval_logger.create_file(f"{logdir}/eval_log.csv")
+    if discount_history_logger:
+        discount_history_logger.create_file(f"{logdir}/history.csv")
     n_checkpoints = 0
 
     # fill buffer with random episodes
@@ -332,6 +347,7 @@ def train_fair(env,
     for ep in range(n_er_episodes):
         curr_t = time.time()
         log_entries = []
+        history_entries = []
         transitions = []
         obs = env.reset()
         done = False
@@ -352,6 +368,13 @@ def train_fair(env,
             if not (log_compact or log_coverage_set_only):
                 log_entries.append(agent_logger.create_entry(ep, step, obs, action, reward, done, info, next_t - curr_t,
                                                              status="e_replay"))
+            if discount_history_logger:
+                history_entries.append(discount_history_logger.create_entry(ep, step,
+                                                                            env.fairness_framework.history.get_size(),
+                                                                            env.fairness_framework.history.difference,
+                                                                            env.fairness_framework.history.prev_size,
+                                                                            next_t - curr_t, status="e_replay"))
+
             curr_t = next_t
 
             obs = n_obs
@@ -361,6 +384,8 @@ def train_fair(env,
         add_episode(transitions, experience_replay, gamma=gamma, max_size=max_size, step=step)
         if not (log_compact or log_coverage_set_only):
             agent_logger.write_data(log_entries, agent_logger.path_experience)
+        if discount_history_logger:
+            discount_history_logger.write_data(history_entries)
 
     del log_entries
 
@@ -415,6 +440,7 @@ def train_fair(env,
         horizons = []
         for _ in range(n_step_episodes):
             transitions = run_episode_fairness(env, model, desired_return, desired_horizon, max_return, agent_logger,
+                                               discount_history_logger,
                                                normalise_state=normalise_state, current_t=step, current_ep=ep,
                                                log_compact=log_compact, log_coverage_set_only=log_coverage_set_only)
             step += len(transitions)
@@ -453,7 +479,7 @@ def train_fair(env,
             # _, e_i = non_dominated(e_returns[:, objectives], return_indexes=True)
             e_returns = e_returns[e_i]
             e_lengths = e_lengths[e_i]
-            e_r, t_r = eval_(env, model, e_returns, e_lengths, max_return, agent_logger, ep, step,
+            e_r, t_r = eval_(env, model, e_returns, e_lengths, max_return, agent_logger, discount_history_logger, ep, step,
                              gamma=gamma, n=n_evaluations, normalise_state=normalise_state, log_compact=log_compact)
 
             # compute e-metric
@@ -503,9 +529,12 @@ if __name__ == '__main__':
     # ########
     # args.vsc = 0
     #
-    # args.steps = 10000
-    # args.window = 1000
+    # args.steps = 5000
+    # args.window = 500
     # args.team_size = 100
+    # args.top_episodes = 10
+    # args.n_episodes = 15
+    # args.er_size = 30
     # args.episode_length = args.team_size * 10
     # args.env = "fraud"
     # args.n_transactions = 200
@@ -517,7 +546,6 @@ if __name__ == '__main__':
     # args.model_updates = 10
     #
     # args.objectives = ["R", "SP", "IF"]#, "IF", "IF"]
-    # args.objectives = "R,SP,IF"
     # args.compute_objectives = ["EO"]
     # args.distance_metrics = ["HMOM"] * 2
     # args.distance_metrics = ["braycurtis", "HMOM"]#, "HEOM"]
@@ -529,6 +557,7 @@ if __name__ == '__main__':
     # args.compute_individual = True
     # args.combined_sensitive_attributes = 0
     # args.log_dir = f"knn_graph{args.combined_sensitive_attributes}"
+    # args.log_dir = f"discount_debug"
     # args.log_coverage_set_only = True
     # args.discount_history = True
     # args.discount_factor = 0.95

@@ -51,6 +51,14 @@ class History(object):
         """Get history"""
         raise NotImplementedError
 
+    def remove_oldest_interactions(self, n=1, difference=0):
+        """Remove the oldest interactions from the history"""
+        raise NotImplementedError
+
+    def get_size(self):
+        """Get the current size of the history"""
+        raise NotImplementedError
+
     def get_confusion_matrices(self, sensitive_attribute: SensitiveAttribute):
         """Get the confusion matrices for the given sensitive attribute"""
         raise NotImplementedError
@@ -67,12 +75,14 @@ class SlidingWindowHistory(History):
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
     """
     def __init__(self, env_actions, window=None, store_interactions=True, has_individual_fairness=True,
-                 nearest_neighbours=None, store_state_array=lambda state: state):
+                 nearest_neighbours=None, store_state_array=lambda state: state, store_feature_values=False):
         # Super call
         super(SlidingWindowHistory, self).__init__(env_actions, window, store_interactions, has_individual_fairness,
                                                    nearest_neighbours, store_state_array)
         #
         self.confusion_matrices = {}
+        self.prev_size = 0
+        self.difference = 0
         #
         if self.store_interactions or self.has_individual_fairness:
             self.states = deque(maxlen=self.window)
@@ -82,6 +92,7 @@ class SlidingWindowHistory(History):
             self.rewards = deque(maxlen=self.window)
             self.ids = deque(maxlen=self.window)
             self.feature_values = {}
+            self.store_feature_values = store_feature_values
 
     def update(self, episode, t, entities, sensitive_attributes: List[SensitiveAttribute]):
         """Update the history with a newly observed tuple
@@ -101,27 +112,28 @@ class SlidingWindowHistory(History):
         self.t = t
         #
         self.newly_added = len(entities)
+        self.prev_size = self.get_size()
         if self.store_interactions:
-            # TODO: append vs extend performance
             for n, (state, action, true_action, score, reward) in enumerate(entities):
                 self.states.append(state)
                 self.actions.append(action)
-                self.true_actions.append(true_action)
+                # self.true_actions.append(true_action)
                 self.scores.append(score)
-                self.rewards.append(reward)
+                # self.rewards.append(reward)
                 self.ids.append(f"E{episode}T{t}Ent{n}")
 
-                features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
+                if self.store_feature_values:
+                    features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
 
-                if len(self.feature_values) == 0:
-                    for feature in features:
-                        self.feature_values[feature] = deque(maxlen=self.window)
+                    if len(self.feature_values) == 0:
+                        for feature in features:
+                            self.feature_values[feature] = deque(maxlen=self.window)
 
-                values = state.get_features(features)
-                for feature, value in zip(features, values):
-                    if isinstance(value, Enum):
-                        value = value.value
-                    self.feature_values[feature].append(value)
+                    values = state.get_features(features)
+                    for feature, value in zip(features, values):
+                        if isinstance(value, Enum):
+                            value = value.value
+                        self.feature_values[feature].append(value)
 
         else:
             if len(self.confusion_matrices) == 0:
@@ -134,7 +146,6 @@ class SlidingWindowHistory(History):
                         self.confusion_matrices[sensitive_attribute] = [0 for _ in range(8)]
                     else:
                         self.confusion_matrices[sensitive_attribute] = deque(maxlen=self.window)
-
             for n, (state, action, true_action, score, reward) in enumerate(entities):
                 # Add information to corresponding confusion matrices
                 self._add_cm_value(state, action, true_action, score, reward, sensitive_attributes)
@@ -151,6 +162,26 @@ class SlidingWindowHistory(History):
     def get_history(self):
         """Get history"""
         return self.states, self.actions, self.true_actions, self.scores, self.rewards
+
+    def remove_oldest_interactions(self, n=1, difference=0):
+        """Remove the oldest interactions from the history"""
+        for _ in range(n):
+            self.states.popleft()
+            self.actions.popleft()
+            # self.true_actions.popleft()
+            self.scores.popleft()
+            # self.rewards.popleft()
+            self.ids.popleft()
+        self.difference = difference
+
+    def get_size(self):
+        """Get the current size of the history"""
+        if self.store_interactions or self.has_individual_fairness:
+            return len(self.states)
+        elif self.window is None:
+            return sum([sum(cm) for cm in self.confusion_matrices.values()])
+        else:
+            return sum([len(cm) for cm in self.confusion_matrices.values()])
 
     def _add_cm_value(self, state, action, true_action, score, reward, sensitive_attributes: List[SensitiveAttribute]):
         for sensitive_attribute in sensitive_attributes:

@@ -262,7 +262,7 @@ def create_fairness_framework_env(args):
                                            discount_factor=args.discount_factor if args.discount_history else None,
                                            discount_threshold=args.discount_threshold if args.discount_history else None,
                                            discount_delay=args.discount_delay if args.discount_history else None,
-                                           min_window=args.min_window,
+                                           min_window=args.min_window  if args.discount_history else None,
                                            nearest_neighbours=args.nearest_neighbours,
                                            inn_sensitive_features=None,
                                            # inn_sensitive_features=[HiringFeature.gender.value],  # TODO

@@ -141,3 +141,33 @@ class EvalLogger(LogEntry):
             entry[f"desired_{o}"] = desired[o]
             entry[f"return_{o}"] = returns[o]
         return entry
+
+
+class DiscountHistoryLogger(LogEntry):
+    """A log entry containing data per timestep for an agent."""
+    def __init__(self):
+        # Super call
+        super(DiscountHistoryLogger, self).__init__()
+        # The fields of the entry type
+        self.episode = "episode"
+        self.t = "t"
+        self.window = "window_size"
+        self.difference = "difference"
+        self.previous_window = "previous_window_size"
+        self.time = "time"
+        self.status = "status"
+        # All the entry fields
+        self.entry_fields = [self.episode, self.t, self.window, self.difference, self.previous_window,
+                             self.time, self.status]
+
+    def create_entry(self, episode, t, window, difference, previous_window, time, status):
+        """Method to create an entry for the log."""
+        return {
+            self.episode: episode,
+            self.t: t,
+            self.window: window,
+            self.difference: difference,
+            self.previous_window: previous_window,
+            self.time: time,
+            self.status: status
+        }
