@@ -24,7 +24,7 @@ from scenario import CombinedState
 class OptimisedSWINN(neighbors.SWINN):
     """Optimised version of SWINN
 
-    TODO: ASSUMPTION: for some methods, the item requesting a search query is in the graph itself:
+    ASSUMPTION: for some methods, the item requesting a search query is in the graph itself:
         retrieve its nearest neighbours. For items that are explicitly mentioned to (possibly) NOT be in the graph,
         the default implementations are used.
     """

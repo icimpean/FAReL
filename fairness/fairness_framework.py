@@ -1,4 +1,5 @@
 from typing import Union, List, Iterable
+from functools import partial
 
 import gymnasium as gym
 
@@ -126,8 +127,10 @@ class ExtendedfMDP(gym.Env):
         if not self.fairness_framework.store_interactions and self.fairness_framework.has_individual_fairness:
             self.fairness_framework.history.store_state_array = env.state_to_array
         self.H_OM_distance = {
-            distance_metric: lambda state1, state2: self.env.H_OM_distance(state1, state2, distance_metric,
-                                                                           self.fairness_framework.alpha, exp=True)
+            # distance_metric: lambda state1, state2: self.env.H_OM_distance(state1, state2, distance_metric,
+            #                                                                self.fairness_framework.alpha, exp=True)
+            distance_metric: partial(self.env.H_OM_distance, distance=distance_metric,
+                                     alpha=self.fairness_framework.alpha, exp=True)
             for distance_metric in ["HEOM", "HMOM"]
         }
 

@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import List, Iterable, Union
 import types
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -306,10 +307,10 @@ class Scenario(object):
         # Heterogeneous Euclidean-Overlap Metric (HEOM)
         if distance == 'HEOM':
             diff = (num1 - num2)
-            d = sum(diff * diff) + sum(nom1 != nom2)
+            d = sum(diff * diff) + np.count_nonzero(nom1 != nom2)
         # Heterogeneous Manhattan-Overlap Metric (HMOM)
         elif distance == 'HMOM':
-            d = sum(np.abs(num1 - num2)) + sum(nom1 != nom2)
+            d = sum(abs(num1 - num2)) + np.count_nonzero(nom1 != nom2)
         else:
             raise ValueError(f"Expected distance: HEOM or HMOM. Got: {distance}")
         return np.exp(-alpha * d) if exp else d
@@ -350,8 +351,8 @@ class Scenario(object):
             norm2 = self._normalise_features(state2, indices=self.indices_i)
 
         # Based on from scipy.spatial.distance.braycurtis
-        l1_diff = abs(norm1 - norm2)
-        l1_sum = abs(norm1 + norm2)
+        l1_diff = np.abs(norm1 - norm2)
+        l1_sum = np.abs(norm1 + norm2)
         if w is not None:
             l1_diff = w * l1_diff
             l1_sum = w * l1_sum

@@ -1,5 +1,4 @@
 from collections import deque
-from enum import Enum
 from typing import List
 
 import numpy as np
@@ -16,6 +15,8 @@ class History(object):
         store_interactions: (Optional) Store the full interactions instead of only the required information for
             fairness notions. Default: True.
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
+        nearest_neighbours: (Optional) The number of nearest neighbours to use in computations.
+        store_state_array: (Optional) The function to generate arrays from a state instance.
     """
     def __init__(self, env_actions, window=None, store_interactions=True, has_individual_fairness=True,
                  nearest_neighbours=None, store_state_array=lambda state: state):
@@ -65,7 +66,7 @@ class History(object):
 
 
 class SlidingWindowHistory(History):
-    """A history of encountered states and actions
+    """A sliding window history of encountered states and actions
 
     Attributes:
         env_actions: The actions taken in environment.
@@ -73,9 +74,11 @@ class SlidingWindowHistory(History):
         store_interactions: (Optional) Store the full interactions instead of only the required information for
             fairness notions. Default: True.
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
+        nearest_neighbours: (Optional) The number of nearest neighbours to use in computations.
+        store_state_array: (Optional) The function to generate arrays from a state instance.
     """
     def __init__(self, env_actions, window=None, store_interactions=True, has_individual_fairness=True,
-                 nearest_neighbours=None, store_state_array=lambda state: state, store_feature_values=False):
+                 nearest_neighbours=None, store_state_array=lambda state: state):
         # Super call
         super(SlidingWindowHistory, self).__init__(env_actions, window, store_interactions, has_individual_fairness,
                                                    nearest_neighbours, store_state_array)
@@ -91,8 +94,6 @@ class SlidingWindowHistory(History):
             self.scores = deque(maxlen=self.window)
             self.rewards = deque(maxlen=self.window)
             self.ids = deque(maxlen=self.window)
-            self.feature_values = {}
-            self.store_feature_values = store_feature_values
 
     def update(self, episode, t, entities, sensitive_attributes: List[SensitiveAttribute]):
         """Update the history with a newly observed tuple
@@ -121,19 +122,6 @@ class SlidingWindowHistory(History):
                 self.scores.append(score)
                 # self.rewards.append(reward)
                 self.ids.append(f"E{episode}T{t}Ent{n}")
-
-                if self.store_feature_values:
-                    features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
-
-                    if len(self.feature_values) == 0:
-                        for feature in features:
-                            self.feature_values[feature] = deque(maxlen=self.window)
-
-                    values = state.get_features(features)
-                    for feature, value in zip(features, values):
-                        if isinstance(value, Enum):
-                            value = value.value
-                        self.feature_values[feature].append(value)
 
         else:
             if len(self.confusion_matrices) == 0:
@@ -250,6 +238,8 @@ class DiscountedHistory(SlidingWindowHistory):
         store_interactions: (Optional) Store the full interactions instead of only the required information for
             fairness notions. Default: True.
         has_individual_fairness: (Optional) Is used to compute individual fairness notions. Default: True.
+        nearest_neighbours: (Optional) The number of nearest neighbours to use in computations.
+        store_state_array: (Optional) The function to generate arrays from a state instance.
     """
     def __init__(self, env_actions, discount_factor=1.0, discount_threshold=1e-5, discount_delay=5,
                  min_window=100,
@@ -267,6 +257,7 @@ class DiscountedHistory(SlidingWindowHistory):
 
 
 class HistoryTimestep(SlidingWindowHistory):
+    """A history consisting of a single timestep"""
     def __init__(self, env_actions, has_individual_fairness=True, nearest_neighbours=None,
                  store_state_array=lambda state: state):
         # Super call
@@ -282,19 +273,6 @@ class HistoryTimestep(SlidingWindowHistory):
         if self.store_interactions:
             self.states, self.actions, self.true_actions, self.scores, self.rewards = zip(*entities)
             self.ids = [f"E{episode}T{t}Ent{n}" for n in range(len(entities))]
-
-            # TODO: still needed?
-            # features = state.get_state_features(get_name=False, no_hist=True, individual_only=True)
-            #
-            # if len(self.feature_values) == 0:
-            #     for feature in features:
-            #         self.feature_values[feature] = deque(maxlen=self.window)
-            #
-            # values = state.get_features(features)
-            # for feature, value in zip(features, values):
-            #     if isinstance(value, Enum):
-            #         value = value.value
-            #     self.feature_values[feature].append(value)
 
         else:
             if len(self.confusion_matrices) == 0:

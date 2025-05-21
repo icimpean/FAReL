@@ -21,7 +21,6 @@ class OptimisedVertex(Vertex):
         self._search_n_actions = None
         self._search_mean_n_actions = None
 
-    # TODO: remove
     def __str__(self):
         return f"OptimisedVertex({self.uuid})"
 
@@ -58,7 +57,7 @@ class OptimisedVertex(Vertex):
         self.neighbours.update(neighbors)
 
         # Neighbors are ordered by distance
-        if len(neighbors) != 0:  # TODO
+        if len(neighbors) != 0:
             self.worst_edge = n
         self.not_up_to_date()
 

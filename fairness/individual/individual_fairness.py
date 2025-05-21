@@ -40,11 +40,8 @@ def hellinger(p, q, num_actions):
         total = (sqrt_0_1_2 * sqrt_0_1_2) + (sqrt_1_1_2 * sqrt_1_1_2)
         h_dist = np.sqrt(total) / SQRT2
     else:
-        total = 0
-        for i in range(num_actions):
-            sqrt1_2 = np.sqrt(p[i]) - np.sqrt(q[i])
-            total += (sqrt1_2 * sqrt1_2)
-        h_dist = np.sqrt(total) / SQRT2
+        diff = np.sqrt(p) - np.sqrt(q)
+        h_dist = np.sqrt(sum(diff ** 2)) / SQRT2
     return h_dist
 
 
