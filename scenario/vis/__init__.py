@@ -20,8 +20,8 @@ def get_id(*args):
     return "_".join([str(a) for a in args])
 
 
-def load_pcn_log(results_dir, is_fraud, steps, population, bias, distance, window, objectives, compute_objectives, seed,
-                 overwrite_dir=None, reverse=False):
+def load_agent_log(results_dir, is_fraud, steps, population, bias, distance, window, objectives, compute_objectives,
+                   seed, overwrite_dir=None, reverse=False, name="PCN"):
     if overwrite_dir:
         exp_dir = f"{overwrite_dir}/seed_{seed}"
     else:
@@ -29,14 +29,14 @@ def load_pcn_log(results_dir, is_fraud, steps, population, bias, distance, windo
         exp_dir += f"/bias_{bias}/steps_{steps}/objectives_{':'.join(objectives)}_{':'.join(compute_objectives)}/" \
                    f"distance_metric_{distance}/window_{window}/seed_{seed}/"
     all_runs = sorted([filename for filename in os.listdir(exp_dir) if filename.startswith("202")], reverse=reverse)
-    f = f"{exp_dir}/{all_runs[0]}/pcn_log.csv"
+    f = f"{exp_dir}/{all_runs[0]}/{name.lower()}_log.csv"
     df = pd.read_csv(f, index_col=None)
     return df
 
 
-def load_pcn_dataframes(requested_objectives, computed_objectives, all_objectives, sorted_objectives,
-                        seeds, steps, pcn_idx, base_results_dir, is_fraud, n_transactions, fraud_proportion, team_size,
-                        populations, distances, windows, biases):
+def load_dataframes(requested_objectives, computed_objectives, all_objectives, sorted_objectives,
+                    seeds, steps, pcn_idx, base_results_dir, is_fraud, n_transactions, fraud_proportion, team_size,
+                    populations, distances, windows, biases, name="PCN"):
     env_name = "fraud_detection" if is_fraud else "job_hiring"
     base_results_dir += f"{env_name}/"
     if is_fraud:
@@ -46,6 +46,7 @@ def load_pcn_dataframes(requested_objectives, computed_objectives, all_objective
     results_dir = base_results_dir
 
     all_dataframes = []
+    all_pcn_logs = []
     for population, population_name in populations.items():
         for bias, bias_name in biases.items():
             for distance, distance_name in distances.items():
@@ -57,8 +58,8 @@ def load_pcn_dataframes(requested_objectives, computed_objectives, all_objective
                         # Load in all seeds per experiment
                         for seed in seeds:
                             print("Exp.", population, bias, distance, window, obj, cobj, seed, f"is_single={is_single}")
-                            df = load_pcn_log(results_dir, is_fraud, steps, population, bias, distance,
-                                              window, obj, cobj, seed, reverse=len(distances) < 2)
+                            df = load_agent_log(results_dir, is_fraud, steps, population, bias, distance,
+                                                window, obj, cobj, seed, reverse=len(distances) < 2, name=name)
                             pcn_logs.append(df)
                         # Get coverage sets
                         cs, ndcs = get_coverage_sets(pcn_logs, objectives_indices, is_single, idx=pcn_idx)
@@ -74,8 +75,20 @@ def load_pcn_dataframes(requested_objectives, computed_objectives, all_objective
                             df["id"] = df_id
                         df_ndcs = pd.concat(dfs, ignore_index=True)
                         all_dataframes.append(df_ndcs)
+                        for seed, df in zip(seeds, pcn_logs):
+                            df["seed"] = seed
+                            df["population"] = population
+                            df["bias"] = bias
+                            df["distance"] = distance
+                            df["window"] = window
+                            df["objectives"] = ":".join(obj)
+                            df_id = get_id(population, bias, distance, window, requested_objectives, seed)
+                            df["id"] = df_id
+                        pcn_logs = pd.concat(pcn_logs, ignore_index=True)
+                        all_pcn_logs.append(pcn_logs)
     full_df = pd.concat(all_dataframes, ignore_index=True)
-    return full_df, results_dir
+    all_pcn_logs = pd.concat(all_pcn_logs, ignore_index=True)
+    return full_df, results_dir, all_pcn_logs
 
 
 def get_splits(env_name, populations, distances, windows, biases, requested_objectives):
@@ -219,89 +232,104 @@ def get_coverage_sets(pcn_dfs, objectives_indices, is_single, idx=None):
 
 
 def _diff_pool(args):
-    row, dataframe = args
+    row, dataframe, _ = args
     return [(j, (row - row2).abs().values) for j, row2 in dataframe.iterrows()]
 
 
-def get_diffs(dataframe, processes=4, chunk_size=64):
+def _diff_pool_highlight(args):
+    row, dataframe, highlighted = args
+    return [(j, (row - row2).abs().values) for j, row2 in dataframe.iterrows() if j in highlighted]
+
+
+def get_diffs(dataframe, processes=4, chunk_size=64, highlighted=None):
     if len(dataframe) > 350:
         from multiprocessing import Pool
         with Pool(processes=processes) as pool:
-            args = [(row1, dataframe) for _, row1 in dataframe.iterrows()]
-            differences = pool.map(_diff_pool, args, chunksize=chunk_size)
+            args = [(row1, dataframe, highlighted) for _, row1 in dataframe.iterrows()]
+            differences = pool.map(_diff_pool_highlight if highlighted else _diff_pool, args, chunksize=chunk_size)
             pool.close()
             pool.join()
         return differences
     else:
         differences = []
         for _, row1 in dataframe.iterrows():
-            diffs = [(j, (row1 - row2).abs().values) for j, row2 in dataframe.iterrows()]
+            diffs = [(j, (row1 - row2).abs().values) for j, row2 in dataframe.iterrows()
+                     if (not highlighted) or (j in highlighted)]
             differences.append(diffs)
     return differences
 
 
 def find_representative_subset(dataframe, labels, all_objectives, seeds, processes=4, chunk_size=64):
-    sorted_o_df = dataframe.sort_values(by=labels, ascending=False)[labels]
-    # Compute the extrema for each objective, to find the range of values
-    max_objectives = sorted_o_df.max()
-    min_objectives = sorted_o_df.min()
-    range_obj = max_objectives - min_objectives
+    # sorted_o_df = dataframe.sort_values(by=labels, ascending=False)[labels]
+    sorted_o_df = dataframe[labels]
 
-    min_improvement = len(all_objectives) - 1  # number of objectives that must differ enough
-    highlight_indices = set()
-    sums = sorted_o_df.to_numpy(float)
-    sums = np.sum(sums, axis=1)
-    highlight_indices.add(int(sorted_o_df.iloc[np.argmax(sums)].name))
+    maxima = {o: [] for o in all_objectives}
+    for o in all_objectives:
+        o_max = sorted_o_df[o].max()
+        all_o_max = sorted_o_df[sorted_o_df[o] == o_max].index
+        maxima[o] = [m for m in all_o_max]
+    # Keep as few policies as possible which contain the maxima for all objectives
+    p_counts = {}
+    kept_policies = set()
+    for o, policies in maxima.items():
+        if len(policies) == 1:
+            kept_policies.add(policies[0])
 
-    differences = get_diffs(sorted_o_df[labels], processes=processes, chunk_size=chunk_size)
-    multiplier = 1.0  # 0.5
-    delta = 0.5  # 0.05
+    for o, policies in maxima.items():
+        for p in policies:
+            if p in kept_policies:
+                continue
+            elif p_counts.get(p):
+                p_counts[p] += 1
+            else:
+                p_counts[p] = 1
+    # print("maxima", maxima)
+    # print("kept_policies", kept_policies)
+    # print("p_counts", p_counts)
 
-    best_found = None
-    tries = 0
-    max_tries = 50
-    _min_p = 5
-    _max_p = 12
+    for o, policies in maxima.items():
+        if [(p in kept_policies) for p in policies]:
+            continue
+        pc = [p_counts[p] for p in policies]
+        pmax = np.argmax(pc)
+        kept_policies.add(policies[pmax])
 
-    while (tries <= max_tries) and (len(highlight_indices) < _min_p or len(highlight_indices) > _max_p):
-        threshold = range_obj.values * multiplier
-        highlight_indices = set()
+    differences = get_diffs(sorted_o_df[labels], processes=processes, chunk_size=chunk_size, highlighted=kept_policies)
+    # Get differences of all remaining indices with kept policies so far
+    reduced_diffs = {}
+    for i, diffs in enumerate(differences):
+        idx_i = sorted_o_df.iloc[i].name
+        if idx_i in kept_policies:
+            continue
+        reduced_diffs[idx_i] = np.zeros(len(labels))
+        for j, diff in diffs:
+            # print(j)
+            idx_j = j #sorted_o_df.loc[j].name  # j
+            if idx_j in kept_policies:
+                # reduced_diffs[idx_i] += np.sum(diff)
+                reduced_diffs[idx_i] += diff
+    print(kept_policies)
+    # print(len(differences[0]))
+    # print(len(reduced_diffs[0]))
+    # print(reduced_diffs[0])
 
-        for l, (k, row) in enumerate(sorted_o_df.iterrows()):
-            if l == 0:
-                highlight_indices.add(k)
-                keep_indices = [m for m, d in differences[l] if sum(d >= threshold) >= min_improvement]
-                highlight_indices.update(keep_indices)
-            elif l not in highlight_indices:
-                keep_indices = [m for m, d in differences[l] if sum(d >= threshold) >= min_improvement]
-                highlight_indices.update(keep_indices)
+    # Keep the policies with the greatest differences to the kept policies
+    # reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: item[1], reverse=True)
+    # reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: np.sum(item[1]), reverse=True)
+    # reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: np.mean(item[1]), reverse=True)
+    # reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: np.std(item[1]), reverse=True)
+    # reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: np.max(item[1]), reverse=True)
+    # reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: -np.min(item[1]), reverse=True)
+    # reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: np.mean(item[1]) - np.std(item[1]), reverse=True)
+    reduced_diffs = sorted(reduced_diffs.items(), key=lambda item: np.mean(item[1]) - 0.25 * np.std(item[1]), reverse=True)
+    # print(list(reduced_diffs))
 
-        if len(highlight_indices) < 4:
-            multiplier -= delta * 0.05
-        elif len(highlight_indices) > 15:
-            multiplier += delta * 0.125
-        elif len(highlight_indices) < 7:
-            multiplier -= delta * 0.01
-        else:
-            multiplier += delta * 0.025
+    _min_p = 10  # 5, 8
+    n_sample = _min_p - len(kept_policies)
+    if n_sample > 0:
+        kept_policies.update([p for p, diff in reduced_diffs[:n_sample]])
 
-        if best_found is None:
-            best_found = highlight_indices
-        if len(best_found) == 1:
-            best_found = highlight_indices
+    print(kept_policies)
+    # exit()
 
-        if len(highlight_indices) == len(best_found):
-            tries += 1
-        # Previous is much larger, current is better
-        elif (len(best_found) - _max_p) > (len(highlight_indices) - _max_p):
-            best_found = highlight_indices
-            tries = 0
-        # Previous is too small, current is better
-        elif (_min_p > len(best_found)) and (len(highlight_indices) <= _max_p):
-            best_found = highlight_indices
-            tries = 0
-        else:
-            tries += 1
-    print(f"{len(highlight_indices)} non-dominated policies kept with threshold {threshold} "
-          f"over {len(seeds)} seeds. Keeping best {len(best_found)}")
-    return sorted(best_found)
+    return sorted(kept_policies)
